@@ -15,7 +15,7 @@
  */
 
 
-/* global L, Tangram, Symbol, fetch, Promise */
+/* global L, Tangram, Symbol, fetch, Promise, mbtaHeaders */
 
 (function() {
     'use strict';
@@ -161,19 +161,10 @@ class StopLayerEntry extends LayerEntry {
 class ShapeLayerEntry extends LayerEntry {
     constructor(shapeId, jsonData, mapLayer) {
         super(shapeId, jsonData, mapLayer);
-        
-        // Grab the stop ids from the jsonData.
-/*        var stopIds = [];
-        var stops = jsonData.relationships.stops;
-        stops.data.forEach((stopData) => stopIds.push(stopData.id));
-        stopLayerEntriesPromise(stopIds).then((stopLayers) => {
-            this._stopLayers = stopLayers;
-            if (this.isShowing()) {
-                this._stopLayers.forEach((stopLayer) => stopLayer.show());
-            }
-        });
-*/
     }
+    
+    get routeId() { return this.jsonData.relationships.route.data.id; }
+    
     
     _addedToMap() {
         if (this._stopLayers) {
@@ -495,6 +486,12 @@ class RouteLayerEntry extends LayerEntry {
     }
 }
 
+const ROUTE_LIGHT_RAIL = 0;
+const ROUTE_HEAVY_RAIL = 1;
+const ROUTE_COMMUTER_RAIL = 2;
+const ROUTE_BUS = 3;
+const ROUTE_FERRY = 4;
+
 
 class VehicleMarker {
     constructor(mapLayer, vertices) {
@@ -528,10 +525,42 @@ class VehicleMarker {
     }
 }
 
+var lightRailVertices = [
+    [0, 0],
+    [0, 340 * 12 / 39.37]
+];
+
 class LightRailMarker extends VehicleMarker {
     constructor() {
-        var mapLayer = L.marker();
+        var latLongs = [];
+        verticesToLatitudeLongitude(42, -72, 0, lightRailVertices, latLongs);
+        
+        var mapLayer = L.polyline(latLongs, {
+            color: 'green',
+            weight: 12
+        });
         super(mapLayer);
+        
+        this._latLongs = latLongs;
+    }
+    
+    updateMarkerPosition(vehicleLayerEntry) {
+        if (this._mapLayer) {
+            var color;
+            switch (vehicleLayerEntry.direction) {
+                case 0 :
+                    color = 'green';
+                    break;
+                case 1 :
+                    color = 'darkgreen';
+                    break;
+            }
+            this._mapLayer.setStyle({ color: color });
+
+            verticesToLatitudeLongitude(vehicleLayerEntry.latitude, vehicleLayerEntry.longitude,
+                vehicleLayerEntry.bearing, busVertices, this._latLongs);
+            this._mapLayer.setLatLngs(this._latLongs);
+        }
     }
 }
 
@@ -584,10 +613,42 @@ class HeavyRailMarker extends VehicleMarker {
     }
 }
 
+var commuterRailVertices = [
+    [0, 0],
+    [0, 340 * 12 / 39.37]
+];
+
 class CommuterRailMarker extends VehicleMarker {
     constructor() {
-        var mapLayer = L.marker();
+        var latLongs = [];
+        verticesToLatitudeLongitude(42, -72, 0, commuterRailVertices, latLongs);
+        
+        var mapLayer = L.polyline(latLongs, {
+            color: 'purple',
+            weight: 12
+        });
         super(mapLayer);
+        
+        this._latLongs = latLongs;
+    }
+    
+    updateMarkerPosition(vehicleLayerEntry) {
+        if (this._mapLayer) {
+            var color;
+            switch (vehicleLayerEntry.direction) {
+                case 0 :
+                    color = 'purple';
+                    break;
+                case 1 :
+                    color = 'darkpurple';
+                    break;
+            }
+            this._mapLayer.setStyle({ color: color });
+
+            verticesToLatitudeLongitude(vehicleLayerEntry.latitude, vehicleLayerEntry.longitude,
+                vehicleLayerEntry.bearing, busVertices, this._latLongs);
+            this._mapLayer.setLatLngs(this._latLongs);
+        }
     }
 }
 
@@ -602,7 +663,7 @@ class BusMarker extends VehicleMarker {
         
         var mapLayer = L.polyline(latLongs, {
             color: 'yellow',
-            weight: 12
+            weight: 8
         });
         super(mapLayer);
         
@@ -613,7 +674,7 @@ class BusMarker extends VehicleMarker {
         if (this._mapLayer) {
             switch (vehicleLayerEntry.direction) {
                 case 0 :
-                    this._mapLayer.setStyle({ color: 'lightgray' });
+                    this._mapLayer.setStyle({ color: 'gray' });
                     break;
                 case 1 :
                     this._mapLayer.setStyle({ color: 'darkgray' });
@@ -641,6 +702,10 @@ function isIterable(obj) {
     return typeof obj[Symbol.iterator] === 'function';
 }
 
+function fetchMBTA(path) {
+    path += '&api_key=73fba3c751464eafb5e3aa78386fcf23';
+    return fetch(path);
+}
 
 
 ///////////////////////////////////
@@ -661,7 +726,7 @@ function fetchStops(stopIds) {
         path += stopIds;
     }
     
-    return fetch(path)
+    return fetchMBTA(path)
             .then((response) => response.json())
             .then((myJson) => processStopsResult(myJson));
 }
@@ -737,7 +802,7 @@ function createStationMarker(stopJSON) {
 }
 
 function stopLayerEntriesPromise(stopId) {
-    if (Array.isArray(stopId)) {
+    if (isIterable(stopId)) {
         var idsNeeded = [];
         var existingEntries = [];
         stopId.forEach((id) => {
@@ -751,8 +816,17 @@ function stopLayerEntriesPromise(stopId) {
         });
         
         if (idsNeeded.length > 0) {
-            return fetchStops(idsNeeded)
-                    .then((stopEntries) => existingEntries.concat(stopEntries));
+            var promises = [];
+            var stopsThisPass = [];
+            for (let i = idsNeeded.length; i > 0; i -= stopsThisPass.length) {
+                var count = Math.min(i, 50);
+                stopsThisPass = idsNeeded.slice(i - count, i);
+                promises.push(fetchStops(stopsThisPass)
+                        .then((stopEntries) => 
+                            existingEntries = existingEntries.concat(stopEntries)));
+            }
+            return Promise.all(promises)
+                    .then(() => existingEntries);
         }
         else {
             return Promise.resolve(existingEntries);
@@ -790,7 +864,7 @@ function fetchShapesByRouteIds(routeIds) {
     
     console.log('Fetching Shapes for route: ' + routesFilter);
     
-    return fetch(path)
+    return fetchMBTA(path)
             .then((response) => response.json())
             .then((myJson) => processShapesResult(myJson));
 }
@@ -831,6 +905,38 @@ function processShapeData(data, stopIdsNeeded) {
     var layerEntry = new ShapeLayerEntry(shapeId, data, polyline);
     shapes.set(shapeId, layerEntry);
     
+    var routeEntry = routes.get(layerEntry.routeId);
+    if (routeEntry) {
+        var style = {};
+        if (routeEntry.jsonData.attributes.color !== undefined) {
+            style.color = '#' + routeEntry.jsonData.attributes.color;
+        }
+        
+        switch (routeEntry.routeType) {
+            case ROUTE_LIGHT_RAIL :
+                style.weight = 4;
+                break;
+            
+            case ROUTE_HEAVY_RAIL :
+                style.weight = 4;
+                break;
+                
+            case ROUTE_COMMUTER_RAIL :
+                style.weight = 3;
+                break;
+            
+            case ROUTE_BUS :
+                style.weight = 1;
+                break;
+                
+            case ROUTE_FERRY :
+                style.weight = 3;
+                break;
+        }
+
+        polyline.setStyle(style);
+    }
+    
     var shapeStops = data.relationships.stops;
     shapeStops.data.forEach((stopData) => {
         if (!stops.get(stopData.id)) {
@@ -841,49 +947,10 @@ function processShapeData(data, stopIdsNeeded) {
     return layerEntry;
 }
 
-function shapeLayerEntriesPromiseByTripEntries(tripEntries) {
-    var promise;
-    
-    if (Array.isArray(tripEntries)) {
-        var idsNeeded = new Set();
-        var existingEntries = [];
-        tripEntries.forEach((tripEntry) => {
-            if (!tripEntry.shapeId) {
-                return;
-            }
-            var entry = shapes.get(tripEntry.shapeId);
-            if (entry) {
-                existingEntries.push(entry);
-            }
-            else {
-                idsNeeded.add(tripEntry.routeId);
-            }
-        });
-        
-        if (idsNeeded.size > 0) {
-            promise = fetchShapesByRouteIds(idsNeeded)
-                    .then((entries) => existingEntries.concat(entries));
-        }
-        else {
-            promise = Promise.resolve(existingEntries);
-        }
-    }
-    else {
-        if (tripEntries.shapeId) {
-            var shapeEntry = shapes.get(tripEntries.shapeId);
-            if (shapeEntry) {
-                promise = Promise.resolve(shapeEntry);
-            }
-            else {
-                promise = fetchShapesByRouteIds(tripEntries.routeId);
-            }
-        }
-        promise = Promise.resolve(null);
-    }
-    
-    return promise;
-}
 
+function shapeLayerEntriesByRouteIdsPromise(routeIds) {
+    return fetchShapesByRouteIds(routeIds);
+}
 
 
 
@@ -907,7 +974,7 @@ function fetchTrips(tripIds) {
     
     console.log('Fetching Trip Ids: ' + tripIds);
     
-    return fetch(path)
+    return fetchMBTA(path)
             .then((response) => response.json())
             .then((myJson) => processTripsResult(myJson));
 }
@@ -931,13 +998,7 @@ function processTripsResult(json) {
         routeIds.add(result.routeId);
     }
     
-    return shapeLayerEntriesPromiseByTripEntries(result)
-            .then((shapeEntries) => {
-                shapeEntries.forEach((entry) => {
-                    entry.show();
-                });
-            })
-            .then(() => result);
+    return result;
 }
 
 
@@ -956,7 +1017,7 @@ function processTripData(data) {
 function tripLayerEntriesPromise(tripId) {
     var promise;
     
-    if (Array.isArray(tripId)) {
+    if (isIterable(tripId)) {
         var idsNeeded = [];
         var existingEntries = [];
         tripId.forEach((id) => {
@@ -970,24 +1031,28 @@ function tripLayerEntriesPromise(tripId) {
         });
         
         if (idsNeeded.length > 0) {
-            promise = fetchTrips(idsNeeded)
-                    .then((entries) => existingEntries.concat(entries));
+            var promises = [];
+            var idsThisPass = [];
+            for (let i = idsNeeded.length; i > 0; i -= idsThisPass.length) {
+                var count = Math.min(i, 50);
+                idsThisPass = idsNeeded.slice(i - count, i);
+                promises.push(fetchTrips(idsThisPass)
+                        .then((entries) => 
+                            existingEntries = existingEntries.concat(entries)));
+            }
+            return Promise.all(promises)
+                    .then(() => existingEntries);
         }
         else {
-            promise = Promise.resolve(existingEntries);
+            return Promise.resolve(existingEntries);
         }
     }
-    else {
-        var tripEntry = trips.get(tripId);
-        if (tripEntry) {
-            promise = Promise.resolve(tripEntry);
-        }
-        else {
-            promise = fetchTrips(tripId);
-        }
+
+    var tripEntry = trips.get(tripId);
+    if (tripEntry) {
+        return Promise.resolve(tripEntry);
     }
-    
-    return promise;
+    return fetchTrips(tripId);
 }
 
 
@@ -1009,7 +1074,7 @@ function fetchVehicles(vehicleIds) {
         path += vehicleIds;
     }
     
-    return fetch(path)
+    return fetchMBTA(path)
             .then((response) => response.json())
             .then((myJson) => processVehiclesResult(myJson));
 }
@@ -1029,7 +1094,7 @@ function fetchRouteVehicles(routeIds) {
         path += routeIds;
     }
     
-    return fetch(path)
+    return fetchMBTA(path)
             .then((response) => response.json())
             .then((myJson) => processVehiclesResult(myJson));
 }
@@ -1040,15 +1105,19 @@ function createVehicleMarkerFromRouteLayerEntry(routeLayerEntry) {
     }
     
     switch (routeLayerEntry.routeType) {
-        case 0 :    // Light rail (Green Line, Silver Line?)
+        case ROUTE_LIGHT_RAIL :
             return new LightRailMarker();
-        case 1 :    // Heavy rail (Red, Orange, Blue?)
+            
+        case ROUTE_HEAVY_RAIL :
             return new HeavyRailMarker();
-        case 2 :    // Commuter rail
+            
+        case ROUTE_COMMUTER_RAIL :
             return new CommuterRailMarker();
-        case 3 :    // Bus
+            
+        case ROUTE_BUS :
             return new BusMarker();
-        case 4 :    // Ferry
+            
+        case ROUTE_FERRY :
             return new FerryMarker();
     }
 }
@@ -1134,7 +1203,7 @@ function fetchRouteLayerEntries(routeIds) {
         path += routeIds;
     }
     
-    return fetch(path)
+    return fetchMBTA(path)
             .then((response) => response.json())
             .then((myJson) => processRoutesResultForLayer(myJson));
 }
@@ -1192,7 +1261,13 @@ function routeLayerEntryPromise(routeIds) {
                     .then((entries) => routeEntries.concat(entries));
             routePromises.push(promise);
         });
-        promise = Promise.all(routePromises).then(() => routeEntries);
+        promise = Promise.all(routePromises)
+                .then(() => fetchShapesByRouteIds(routeIdsNeeded))
+                .then((shapeEntries) => {
+                    shapeEntries.forEach((entry) => entry.show());
+                    return routeEntries;
+                })
+                .then(() => routeEntries);
     }
     else {
         promise = Promise.resolve(routeEntries);
@@ -1222,7 +1297,7 @@ function fetchRouteIds(types) {
         path += types;
     }
     
-    return fetch(path)
+    return fetchMBTA(path)
             .then((response) => response.json())
             .then((myJson) => processRoutesResultForIds(myJson));
 }
@@ -1282,7 +1357,7 @@ function processRoutesResultForIds(json) {
     // Inbound routes one color
     // Outbound routes another color?
 
-function onUpdateBtn() {
+function onUpdate() {
     routeLayerEntryPromise(activeRouteIds)
             .then((routeEntries) => {
                 routeEntries.forEach((routeEntry) => routeEntry.show());
@@ -1298,13 +1373,16 @@ function onUpdateBtn() {
     layer.addTo(map);
     map.setView([42.356402, -71.062471], 13);
     
-    //fetchRouteIds([1]).then((routeIds) => { activeRouteIds = routeIds; });
-    
-    routeLayerEntryPromise(activeRouteIds).then(function(routeEntries) {
-        routeEntries.forEach((routeEntry) => routeEntry.show());
+    fetchRouteIds([]).then((routeIds) => { 
+        activeRouteIds = routeIds; 
+        onUpdate();
     });
     
-    setInterval(onUpdateBtn, 10000);
+//    routeLayerEntryPromise(activeRouteIds).then(function(routeEntries) {
+//        routeEntries.forEach((routeEntry) => routeEntry.show());
+//    });
+    
+    setInterval(onUpdate, 5000);
 
     // TODO:
     // When we update vehicles, do a mark and sweep on the vehicles.
