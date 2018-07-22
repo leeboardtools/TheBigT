@@ -27,35 +27,40 @@ var vehicles = new Map();
 var routes = new Map();
 
 var map;
-var activeRouteIds = ['Red', 'Orange', 'Blue', 'Green'];
+
+var subwayRouteIds = [];
+var busRouteIds = [];
+var commuterRailRouteIds = [];
+var ferryRouteIds = [];
+
+var activeSubwayRouteIds = [];
+var activeBusRouteIds = [];
+var activeCommuterRailRouteIds = [];
+var activeFerryRouteIds = [];
+
+var isStopsDisplayed = true;
+var isShapesDisplayed = true;
+var isVehiclesDisplayed = true;
 
 //
 // TODO:
-// Redo the show/hide stuff so we can filter by type, and instead make it a use/unuse.
-//
-// Add a sweep phase when updating. How?
-// At each tick, clear everyone.
-// When someone's updated, that marks them and everything related.
-// At the next tick, hide anyone who's still clear.
-//
-// This gives everything a tick to update.
-//
-// Change loading to:
-//  Load RouteEntry -> This starts loading:
-//          -> VehicleEntry
-//              -> This results in TripEntry loading.
-//              
-//          -> ShapeEntry
-//              -> This results in StopEntry loading.
+// Redo vehicle markers
 // 
+// Add prediction info to stops, vehicles.
+//
+
 
 class LayerEntry {
     constructor(id, jsonData, mapLayer) {
         this._id = id;
         this._jsonData= jsonData;
         this._mapLayer = mapLayer;
-        this._visibleCount = 0;
         this._markCount = 0;
+
+        this._isShowing = false;
+        this._isLayerInMap = false;
+        
+        this._visibleCount = 0;
     }
     
     get id() { return this._id; }
@@ -65,54 +70,94 @@ class LayerEntry {
     get markCount() { return this._markCount; }
     mark() { ++this._markCount; }
     
+    clearMark() { this._markCount = 0; }
+    
+    
     get mapLayer() { return this._mapLayer; }
     set mapLayer(mapLayer) {
         if (this._mapLayer !== mapLayer) {
-            if (this._visibleCount > 0) {
+            if (this._isLayerInMap) {
                 map.removeLayer(this._mapLayer);
             }
             this._mapLayer = mapLayer;
-            if (this._mapLayer && (this._visibleCount > 0)) {
-                this._mapLaer.addTo(map);
+            if (this._isLayerInMap) {
+                if (this._mapLayer) {
+                    this._mapLayer.addTo(map);
+                }
+                else {
+                    this._isLayerInMap = false;
+                }
             }
         }
-    }
-    
-    isShowing() {
-        return (this._visibleCount > 0);
     }
     
     show() {
-        if (this._visibleCount <= 0) {
-            this._visibleCount = 1;
-            if (this._mapLayer) {
-                this._mapLayer.addTo(map);
-                this._addedToMap();
+        if (this._mapLayer) {
+            if (this.isTypeDisplayed()) {
+                if (!this._isLayerInMap) {
+                    this._mapLayer.addTo(map);
+                    this._isLayerInMap = true;
+                }
             }
         }
-        else {
-            ++this._visibleCount;
-        }
+        this._isShowing = true;
+
         return this;
     }
     
     hide() {
-        --this._visibleCount;
-        if (!this._visibleCount) {
-            if (this._mapLayer) {
-                map.removeLayer(this._mapLayer);
-                this._removedFromMap();
+        if (this._isShowing) {
+            if (this._isLayerInMap) {
+                if (this._mapLayer) {
+                    map.removeLayer(this._mapLayer);                    
+                }
+                this._isLayerInMap = false;
             }
+            this._isShowing = false;
         }
         return this;
     }
     
-    _addedToMap() {        
-    }
-    
-    _removedFromMap() {        
+    isTypeDisplayed() {
+        return true;
     }
 };
+
+function clearMarks(map) {
+    map.forEach((entry) => {
+        entry.clearMark();
+    });
+}
+
+function showHideFromMarked(map) {
+    map.forEach((entry) => {
+        (entry.markCount) ? entry.show() : entry.hide();
+    });
+}
+
+function showIfMarked(map) {
+    map.forEach((entry) => {
+        if (entry.markCount) {
+            entry.show();
+        }
+    });
+}
+
+function hideIfNotMarked(map) {
+    map.forEach((entry) => {
+        if (!entry.markCount) {
+            entry.hide();
+        }
+    });
+}
+
+function markIfRouteId(map, routeId) {
+    map.forEach((entry) => {
+        if (entry.routeId === routeId) {
+            entry.mark();
+        }
+    });
+}
 
 
 class StopLayerEntry extends LayerEntry {
@@ -155,6 +200,10 @@ class StopLayerEntry extends LayerEntry {
   }
 }
 */
+    
+    isTypeDisplayed() {
+        return isStopsDisplayed;
+    }
 };
 
 
@@ -164,20 +213,9 @@ class ShapeLayerEntry extends LayerEntry {
     }
     
     get routeId() { return this.jsonData.relationships.route.data.id; }
+    get directionId() { return this.jsonData.attributes.direction_id; }
     
-    
-    _addedToMap() {
-        if (this._stopLayers) {
-            this._stopLayers.forEach((stopLayer) => stopLayer.show());
-        }
-    }
-    
-    _removedFromMap() {
-        if (this._stopLayers) {
-            this._stopLayers.forEach((stopLayer) => stopLayer.hide());
-        }
-    }
-/*
+    /*
 {
   "data": {
     "attributes": {
@@ -230,6 +268,21 @@ class ShapeLayerEntry extends LayerEntry {
   }
 }
 */    
+
+    mark() {
+        super.mark();
+        this.jsonData.relationships.stops.data.forEach((stop) => {
+            var stopId = stop.id;
+            var stopEntry = stops.get(stopId);
+            if (stopEntry) {
+                stopEntry.mark();
+            }
+        });
+    }
+       
+    isTypeDisplayed() {
+        return isShapesDisplayed;
+    }
 };
 
 
@@ -284,31 +337,24 @@ class TripLayerEntry extends LayerEntry {
   }
 }
 */
-    show() {
-        super.show();
-        if (this._shapeLayers) {
-            this._shapeLayers.forEach((shapeLayer) => shapeLayer.show());
-        }
-    }
-    
-    hide() {
-        super.hide();
-        if (this._shapeLayers) {
-            this._shapeLayers.forEach((shapeLayer) => shapeLayer.hide());
-        }
+       
+    isTypeDisplayed() {
+        return false;
     }
 }
 
 
 var earthCircumference = 40075000;
-var xyToLatLong = 2.*3.14159265 / earthCircumference;
+var xyToLatLong = 360. / earthCircumference;
 var degToRad = Math.PI / 180.;
 
 function verticesToLatitudeLongitude(latitude, longitude, bearingDeg, xys, latLongs) {
     // We're very small scale compared to the earth, we'll just approximate the latitude/longitudes.
-    var bearingRad = bearingDeg * degToRad;
+    // Of course if the latitude is near the poles, we're screwed...
+    var bearingRad = (90 - bearingDeg) * degToRad;
     var cosB = Math.cos(bearingRad);
     var sinB = Math.sin(bearingRad);
+    var longScale = xyToLatLong / Math.cos(latitude * degToRad);
     
     latLongs.length = xys.length;
     for (let i = xys.length - 1; i >= 0; --i) {
@@ -316,7 +362,7 @@ function verticesToLatitudeLongitude(latitude, longitude, bearingDeg, xys, latLo
         let y = xys[i][1];
         latLongs[i] = [
             latitude + (x * cosB + y * sinB) * xyToLatLong,
-            longitude + (-x * sinB + y * cosB) * xyToLatLong
+            longitude + (-x * sinB + y * cosB) * longScale
         ];
     }
 }
@@ -390,13 +436,6 @@ class VehicleLayerEntry extends LayerEntry {
   }
 } */    
     
-    _addedToMap() {
-    }
-    
-    _removedFromMap() {
-        
-    }
-    
     updateJSONData(jsonData) {
         var lastRouteId = this.routeId;
         var lastTripId = this.tripId;
@@ -408,22 +447,10 @@ class VehicleLayerEntry extends LayerEntry {
             this._vehicleMarker.updateMarkerPosition(this);
             this._vehicleMarker.updateMarkerPopup(this);
         }
-        
-        if (lastTripId !== this.tripId) {
-            if (this.isShowing()) {
-                var tripEntry = trips.get(lastTripId);
-                if (tripEntry) {
-                    tripEntry.hide();
-                }
-            }
-            
-            tripLayerEntriesPromise(this.tripId)
-                    .then((tripEntries) => {
-                        if (this.isShowing()) {
-                            tripEntries.forEach((entry) => entry.show());
-                        }
-                    });
-        }
+    }
+       
+    isTypeDisplayed() {
+        return isVehiclesDisplayed;
     }
 }
 
@@ -462,27 +489,19 @@ class RouteLayerEntry extends LayerEntry {
 } */    
     
     get routeType() { return this.jsonData.attributes.type; }
-    get name() { return this.jsonData.attributes.short_name; }
+    get name() { return (this.jsonData.attributes.long_name) 
+        ? this.jsonData.attributes.long_name : this.jsonData.attributes.short_name; }
     get directionNames() { return this.jsonData.attributes.direction_names; }
-
-    show() {
-        super.show();
-        var routeId = this.id;
-        vehicles.forEach((entry, id) => {
-            if (entry.routeId === routeId) {
-                entry.show();
-            }
-        });
-    }
     
-    hide() {
-        super.hide();
+    mark() {
+        super.mark();
         var routeId = this.id;
-        vehicles.forEach((entry, id) => {
-            if (entry.routeId === routeId) {
-                entry.hide();
-            }
-        });
+        markIfRouteId(vehicles, routeId);
+        markIfRouteId(shapes, routeId);
+    }
+       
+    isTypeDisplayed() {
+        return false;
     }
 }
 
@@ -494,16 +513,21 @@ const ROUTE_FERRY = 4;
 
 
 class VehicleMarker {
-    constructor(mapLayer, vertices) {
-        this._mapLayer = mapLayer;
+    constructor(vertices, options) {
         this._vertices = vertices;
+        this._latLongs = [];
+        verticesToLatitudeLongitude(42, -72, 0, vertices, this._latLongs);
+        
+        this._mapLayer = L.polygon(this._latLongs, options);
     }
     
     get mapLayer() { return this._mapLayer; }
     
     updateMarkerPosition(vehicleLayerEntry) {
         if (this._mapLayer) {
-            this._mapLayer.setLatLng([vehicleLayerEntry.latitude, vehicleLayerEntry.longitude]);
+            verticesToLatitudeLongitude(vehicleLayerEntry.latitude, vehicleLayerEntry.longitude,
+                vehicleLayerEntry.bearing, this._vertices, this._latLongs);
+            this._mapLayer.setLatLngs(this._latLongs);
         }
     }
     
@@ -518,7 +542,8 @@ class VehicleMarker {
                 popupMsg += vehicleLayerEntry.routeId;
             }
             popupMsg += '</div>';
-            popupMsg += '<div>Vehicle:' + vehicleLayerEntry.id + '</div>';
+            popupMsg += '<div>Vehicle: ' + vehicleLayerEntry.id + '</div>';
+            popupMsg += '<div>Bearing: ' + vehicleLayerEntry.bearing + '</div>';
             popupMsg += '<div>Last updated: ' + vehicleLayerEntry.updatedAt + '</div>';
             this._mapLayer.bindPopup(popupMsg);
         }
@@ -527,170 +552,116 @@ class VehicleMarker {
 
 var lightRailVertices = [
     [0, 0],
-    [0, 340 * 12 / 39.37]
+    [50, -50],
+    [50, -150],
+    [0, -100],
+    [-50, -150],
+    [-50, -50]
 ];
 
 class LightRailMarker extends VehicleMarker {
-    constructor() {
-        var latLongs = [];
-        verticesToLatitudeLongitude(42, -72, 0, lightRailVertices, latLongs);
-        
-        var mapLayer = L.polyline(latLongs, {
-            color: 'green',
-            weight: 12
+    constructor(routeLayerEntry) {
+        super(lightRailVertices, {
+            fillColor: 'DarkGreen',
+            fillOpacity: 1,
+            weight: 0
         });
-        super(mapLayer);
-        
-        this._latLongs = latLongs;
-    }
-    
-    updateMarkerPosition(vehicleLayerEntry) {
-        if (this._mapLayer) {
-            var color;
-            switch (vehicleLayerEntry.direction) {
-                case 0 :
-                    color = 'green';
-                    break;
-                case 1 :
-                    color = 'darkgreen';
-                    break;
-            }
-            this._mapLayer.setStyle({ color: color });
-
-            verticesToLatitudeLongitude(vehicleLayerEntry.latitude, vehicleLayerEntry.longitude,
-                vehicleLayerEntry.bearing, busVertices, this._latLongs);
-            this._mapLayer.setLatLngs(this._latLongs);
-        }
-    }
+    }    
 }
 
 var heavyRailVertices = [
     [0, 0],
-    [0, 340 * 12 / 39.37]
+    [50, -50],
+    [50, -200],
+    [0, -150],
+    [-50, -200],
+    [-50, -50]
 ];
 
 class HeavyRailMarker extends VehicleMarker {
-    constructor() {
-        var latLongs = [];
-        verticesToLatitudeLongitude(42, -72, 0, heavyRailVertices, latLongs);
+    constructor(routeLayerEntry) {
+        var color;
+        switch (routeLayerEntry.id) {
+            case 'Red' :
+                color = 'DarkRed';
+                break;
+                
+            case 'Orange' :
+                color = 'DarkOrange';
+                break;
+                
+            case 'Blue' :
+                color = 'DarkBlue';
+                break;
+        }
         
-        var mapLayer = L.polyline(latLongs, {
-            color: 'yellow',
-            weight: 12
-        });
-        super(mapLayer);
-        
-        this._latLongs = latLongs;
+        super(heavyRailVertices, {
+                fillColor: color,
+                fillOpacity: 1,
+                color: color,
+                opacity: 0.5,
+                weight: 0
+            });
     }
     
-    updateMarkerPosition(vehicleLayerEntry) {
-        if (this._mapLayer) {
-            var color;
-            switch (vehicleLayerEntry.routeId) {
-                case 'Red' :
-                    color = 'Red';
-                    break;
-                case 'Orange' :
-                    color = 'Orange';
-                    break;
-                case 'Blue' :
-                    color = 'Blue';
-                    break;
-            }
-            switch (vehicleLayerEntry.direction) {
-                case 0 :
-                    break;
-                case 1 :
-                    color = 'dark' + color;
-                    break;
-            }
-            this._mapLayer.setStyle({ color: color });
-
-            verticesToLatitudeLongitude(vehicleLayerEntry.latitude, vehicleLayerEntry.longitude,
-                vehicleLayerEntry.bearing, busVertices, this._latLongs);
-            this._mapLayer.setLatLngs(this._latLongs);
-        }
-    }
 }
 
 var commuterRailVertices = [
     [0, 0],
-    [0, 340 * 12 / 39.37]
+    [50, -50],
+    [50, -250],
+    [0, -200],
+    [-50, -250],
+    [-50, -50]
 ];
 
 class CommuterRailMarker extends VehicleMarker {
-    constructor() {
-        var latLongs = [];
-        verticesToLatitudeLongitude(42, -72, 0, commuterRailVertices, latLongs);
-        
-        var mapLayer = L.polyline(latLongs, {
-            color: 'purple',
-            weight: 12
+    constructor(routeLayerEntry) {
+        super(commuterRailVertices, {
+            fillColor: 'purple',
+            fillOpacity: 1,
+            weight: 0
         });
-        super(mapLayer);
-        
-        this._latLongs = latLongs;
-    }
-    
-    updateMarkerPosition(vehicleLayerEntry) {
-        if (this._mapLayer) {
-            var color;
-            switch (vehicleLayerEntry.direction) {
-                case 0 :
-                    color = 'purple';
-                    break;
-                case 1 :
-                    color = 'darkpurple';
-                    break;
-            }
-            this._mapLayer.setStyle({ color: color });
-
-            verticesToLatitudeLongitude(vehicleLayerEntry.latitude, vehicleLayerEntry.longitude,
-                vehicleLayerEntry.bearing, busVertices, this._latLongs);
-            this._mapLayer.setLatLngs(this._latLongs);
-        }
-    }
+    }    
 }
 
+var busHWidth = 30;
 var busVertices = [
     [0, 0],
-    [0, 140 * 12 / 39.37]
+    [busHWidth, -busHWidth],
+    [busHWidth, -100],
+    [0, -100-busHWidth],
+    [-busHWidth, -100],
+    [-busHWidth, -busHWidth]
+    //[0, 140 * 12 / 39.37]
 ];
 class BusMarker extends VehicleMarker {
-    constructor() {
-        var latLongs = [];
-        verticesToLatitudeLongitude(42, -72, 0, busVertices, latLongs);
-        
-        var mapLayer = L.polyline(latLongs, {
-            color: 'yellow',
-            weight: 8
+    constructor(routeLayerEntry) {
+        super(busVertices, {
+            fillColor: 'darkCyan',
+            fillOpacity: 1,
+            weight: 0
         });
-        super(mapLayer);
-        
-        this._latLongs = latLongs;
-    }
-
-    updateMarkerPosition(vehicleLayerEntry) {
-        if (this._mapLayer) {
-            switch (vehicleLayerEntry.direction) {
-                case 0 :
-                    this._mapLayer.setStyle({ color: 'gray' });
-                    break;
-                case 1 :
-                    this._mapLayer.setStyle({ color: 'darkgray' });
-                    break;
-            }
-            verticesToLatitudeLongitude(vehicleLayerEntry.latitude, vehicleLayerEntry.longitude,
-                vehicleLayerEntry.bearing, busVertices, this._latLongs);
-            this._mapLayer.setLatLngs(this._latLongs);
-        }
     }
 }
 
+
+var ferryVertices = [
+    [0, 0],
+    [50, -50],
+    [50, -150],
+    [0, -100],
+    [-50, -150],
+    [-50, -50]
+    //[0, 140 * 12 / 39.37]
+];
 class FerryMarker extends VehicleMarker {
     constructor() {
-        var mapLayer = L.marker();
-        super(mapLayer);
+        super(ferryVertices, {
+            fillColor: 'white',
+            fillOpacity: 1,
+            weight: 0
+        });
     }
 }
 
@@ -772,10 +743,12 @@ function processStopData(data) {
 }
 
 
+var stopSize = 20;
 var stopVertices = [
-    [100,0],
-    [0,100],
-    [-100,0]
+    [stopSize, -stopSize],
+    [stopSize, stopSize],
+    [-stopSize, stopSize],
+    [-stopSize, -stopSize]
 ];
 function createStopMarker(stopJSON) {
     // TODO: Improve this marker...
@@ -783,7 +756,10 @@ function createStopMarker(stopJSON) {
     var longitude = stopJSON.attributes.longitude;
     var latLongs = [];
     verticesToLatitudeLongitude(latitude, longitude, 0, stopVertices, latLongs);
-    var marker = L.polygon(latLongs, { color: 'blue' });
+    var marker = L.polygon(latLongs, { 
+        fillColor: 'steelblue',
+        weight: 0
+    });
     return marker;
 }
 
@@ -862,7 +838,7 @@ function fetchShapesByRouteIds(routeIds) {
     
     path += routesFilter;
     
-    console.log('Fetching Shapes for route: ' + routesFilter);
+    //console.log('Fetching Shapes for route: ' + routesFilter);
     
     return fetchMBTA(path)
             .then((response) => response.json())
@@ -887,9 +863,6 @@ function processShapesResult(json) {
     
     if (stopIdsNeeded.size > 0) {
         return stopLayerEntriesPromise(stopIdsNeeded)
-                .then((stopLayers) => {
-                    stopLayers.forEach((stopLayer) => stopLayer.show());
-                })
                 .then(() => result);
     }
 
@@ -905,12 +878,15 @@ function processShapeData(data, stopIdsNeeded) {
     var layerEntry = new ShapeLayerEntry(shapeId, data, polyline);
     shapes.set(shapeId, layerEntry);
     
+    var popupMsg;
+    
     var routeEntry = routes.get(layerEntry.routeId);
     if (routeEntry) {
         var style = {};
         if (routeEntry.jsonData.attributes.color !== undefined) {
             style.color = '#' + routeEntry.jsonData.attributes.color;
         }
+        style.opacity = 0.5;
         
         switch (routeEntry.routeType) {
             case ROUTE_LIGHT_RAIL :
@@ -935,7 +911,12 @@ function processShapeData(data, stopIdsNeeded) {
         }
 
         polyline.setStyle(style);
+        
+        popupMsg = '<div>' + routeEntry.name + '</div>';
+        popupMsg += '<div>' + routeEntry.directionNames[layerEntry.directionId] + '</div>';
     }
+        
+    polyline.bindPopup(popupMsg);
     
     var shapeStops = data.relationships.stops;
     shapeStops.data.forEach((stopData) => {
@@ -972,7 +953,7 @@ function fetchTrips(tripIds) {
         path += tripIds;
     }
     
-    console.log('Fetching Trip Ids: ' + tripIds);
+    //console.log('Fetching Trip Ids: ' + tripIds);
     
     return fetchMBTA(path)
             .then((response) => response.json())
@@ -1106,19 +1087,19 @@ function createVehicleMarkerFromRouteLayerEntry(routeLayerEntry) {
     
     switch (routeLayerEntry.routeType) {
         case ROUTE_LIGHT_RAIL :
-            return new LightRailMarker();
+            return new LightRailMarker(routeLayerEntry);
             
         case ROUTE_HEAVY_RAIL :
-            return new HeavyRailMarker();
+            return new HeavyRailMarker(routeLayerEntry);
             
         case ROUTE_COMMUTER_RAIL :
-            return new CommuterRailMarker();
+            return new CommuterRailMarker(routeLayerEntry);
             
         case ROUTE_BUS :
-            return new BusMarker();
+            return new BusMarker(routeLayerEntry);
             
         case ROUTE_FERRY :
-            return new FerryMarker();
+            return new FerryMarker(routeLayerEntry);
     }
 }
 
@@ -1166,15 +1147,9 @@ function processVehiclesResult(json) {
         result = layerEntry;
     }
     
-    console.log('Processed Vehicle Ids: ' + logMsg);
+    //console.log('Processed Vehicle Ids: ' + logMsg);
     
     return tripLayerEntriesPromise(tripIds)
-            .then((tripEntries) => {
-                tripEntries.forEach((entry) => {
-                    entry.show();
-                });
-                return result;
-            })
             .then(() => result );
 }
 
@@ -1263,10 +1238,6 @@ function routeLayerEntryPromise(routeIds) {
         });
         promise = Promise.all(routePromises)
                 .then(() => fetchShapesByRouteIds(routeIdsNeeded))
-                .then((shapeEntries) => {
-                    shapeEntries.forEach((entry) => entry.show());
-                    return routeEntries;
-                })
                 .then(() => routeEntries);
     }
     else {
@@ -1356,11 +1327,55 @@ function processRoutesResultForIds(json) {
     
     // Inbound routes one color
     // Outbound routes another color?
+function showAllMarked() {
+    showIfMarked(shapes);
+    showIfMarked(stops);
+    //showIfMarked(trips);
+    showIfMarked(vehicles);
+    //showIfMarked(routes);
+}
 
 function onUpdate() {
-    routeLayerEntryPromise(activeRouteIds)
+    console.log('start onUpdate');
+    clearMarks(stops);
+    clearMarks(shapes);
+    clearMarks(trips);
+    clearMarks(vehicles);
+    clearMarks(routes);
+    
+    routeLayerEntryPromise(activeBusRouteIds)
             .then((routeEntries) => {
-                routeEntries.forEach((routeEntry) => routeEntry.show());
+                routeEntries.forEach((entry) => {
+                    entry.mark();
+                });
+                showAllMarked();
+                return routeLayerEntryPromise(activeCommuterRailRouteIds);
+            })
+            .then((routeEntries) => {
+                routeEntries.forEach((entry) => {
+                    entry.mark();
+                });
+                showAllMarked();
+                return routeLayerEntryPromise(activeSubwayRouteIds);
+            })
+            .then((routeEntries) => {
+                routeEntries.forEach((entry) => {
+                    entry.mark();
+                });
+                showAllMarked();
+                return routeLayerEntryPromise(activeFerryRouteIds);
+            })
+            .then((routeEntries) => {
+                routeEntries.forEach((entry) => {
+                    entry.mark();
+                });
+                showHideFromMarked(stops);
+                showHideFromMarked(shapes);
+                showHideFromMarked(trips);
+                showHideFromMarked(vehicles);
+                showHideFromMarked(routes);
+                
+                console.log('finish onUpdate');
             });
 }
 
@@ -1368,25 +1383,55 @@ function onUpdate() {
     map = L.map('map');
     var layer = Tangram.leafletLayer({
         scene: 'scene.yaml',
-        attribution: '<a href="https://mapzen.com/tangram" target="_blank">Tangram</a> | &copy; OSM contributors | <a href="https://mapzen.com/" target="_blank">Mapzen</a>'
+        attribution: '<a href="https://mapzen.com/tangram" target="_blank">Tangram</a> | &copy; OSM contributors | <a href="https://mapzen.com/" target="_blank">Mapzen</a> | <a href="https://mbta.com/" target="_blank">MBTA MassDOT</a>'
     });
     layer.addTo(map);
     map.setView([42.356402, -71.062471], 13);
+        
+    fetchRouteIds([ROUTE_LIGHT_RAIL])
+            .then((routeIds) => { 
+                subwayRouteIds = routeIds;
+                return fetchRouteIds([ROUTE_HEAVY_RAIL]);
+            })
+            .then((routeIds) => { 
+                subwayRouteIds = subwayRouteIds.concat(routeIds); 
+                return fetchRouteIds([ROUTE_COMMUTER_RAIL]);
+            })
+            .then((routeIds) => { 
+                commuterRailRouteIds = routeIds; 
+                return fetchRouteIds([ROUTE_BUS]);
+            })
+            .then((routeIds) => { 
+                busRouteIds = routeIds; 
+                return fetchRouteIds([ROUTE_FERRY]);
+            })
+            .then((routeIds) => { 
+                ferryRouteIds = routeIds;
+        
+                activeSubwayRouteIds = Array.from(subwayRouteIds);
+                //activeSubwayRouteIds = ['Red'];
+                activeBusRouteIds = Array.from(busRouteIds);
+                activeCommuterRailRouteIds = Array.from(commuterRailRouteIds);
+                activeFerryRouteIds = Array.from(ferryRouteIds);
+                
+                onUpdate();
+            });
     
-    fetchRouteIds([]).then((routeIds) => { 
-        activeRouteIds = routeIds; 
-        onUpdate();
-    });
-    
-//    routeLayerEntryPromise(activeRouteIds).then(function(routeEntries) {
-//        routeEntries.forEach((routeEntry) => routeEntry.show());
-//    });
+    //isShapesDisplayed = false;
     
     setInterval(onUpdate, 5000);
 
-    // TODO:
-    // When we update vehicles, do a mark and sweep on the vehicles.
-    // When there is a change in visible routes, do a mark and sweep on the shapes.
-    // Should also do this whenever vehicles are hidden/appear.
 
+    // Test changing active routes...
+/*    window.onclick = function(event) {
+        if (activeBusRouteIds.length <= 1) {
+            activeBusRouteIds = Array.from(busRouteIds);
+        }
+        else {
+            activeBusRouteIds.length = 1;
+            activeBusRouteIds[0] = 78;
+        }
+        onUpdate();
+    };
+*/
 }());
