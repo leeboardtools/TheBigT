@@ -591,7 +591,7 @@ class VehicleMarker {
             var opacity;
             var date = new Date(vehicleLayerEntry.updatedAt);
             if (!Number.isNaN(date.getHours())) {
-                var ageMilliseconds = date.valueOf() - currentUpdateDate.valueOf();
+                var ageMilliseconds = currentUpdateDate - date.valueOf();
                 ageMilliseconds = Math.max(0, ageMilliseconds);
                 ageMilliseconds = Math.min(ageMilliseconds, maxTimeStampFadeMilliSeconds);
                 var scale = ageMilliseconds / maxTimeStampFadeMilliSeconds;
