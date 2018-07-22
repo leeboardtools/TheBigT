@@ -42,12 +42,15 @@ var isStopsDisplayed = true;
 var isShapesDisplayed = true;
 var isVehiclesDisplayed = true;
 
+var currentUpdateDate = new Date();
+
+var maxTimeStampFadeMilliSeconds = 3 * 60 * 1000;
+
 //
 // TODO:
-// Redo vehicle markers
-// 
-// Add prediction info to stops, vehicles.
-//
+// UI for picking routes, enabling/disabling layers.
+// Welcome message.
+// Save state.
 
 
 class LayerEntry {
@@ -164,6 +167,8 @@ class StopLayerEntry extends LayerEntry {
     constructor(stopId, jsonData, mapLayer) {
         super(stopId, jsonData, mapLayer);
     }
+    
+    get name() { return this.jsonData.attributes.name; }
 /*
 {
   "data": {
@@ -203,6 +208,29 @@ class StopLayerEntry extends LayerEntry {
     
     isTypeDisplayed() {
         return isStopsDisplayed;
+    }
+    
+    getStopMsgFromPredictions(predictionEntries) {
+        var msg = '<div>' + this.name + '</div>';
+        if (predictionEntries) {
+            // We only want the first prediction for each route.
+            var visitedRoutes = new Set();
+            predictionEntries.forEach((predictionEntry) => {
+                var routeId = predictionEntry.routeId;
+                if (visitedRoutes.has(routeId)) {
+                    return;
+                }
+                
+                var predictionMsg = predictionEntry.getPredictionMsg();
+                if (!predictionMsg) {
+                    return;
+                }
+                
+                visitedRoutes.add(routeId);
+                msg += '<div>' + predictionEntry.routeName + ': ' + predictionMsg + '</div>';
+            });
+        }
+        return msg;
     }
 };
 
@@ -445,12 +473,43 @@ class VehicleLayerEntry extends LayerEntry {
         // If we have a marker, update the marker...
         if (this._vehicleMarker) {
             this._vehicleMarker.updateMarkerPosition(this);
-            this._vehicleMarker.updateMarkerPopup(this);
         }
     }
        
     isTypeDisplayed() {
         return isVehiclesDisplayed;
+    }
+    
+    getVehicleMsgFromPredictions(predictionEntries) {
+        var msg = '<div>';
+        var routeEntry = routes.get(this.routeId);
+        if (routeEntry) {
+            msg += routeEntry.name + ' ' + routeEntry.directionNames[this.direction];
+        }
+        else {
+            msg += this.routeId;
+        }
+        msg += '</div>';
+
+        if (predictionEntries && predictionEntries.length) {
+            var predictionMsg = predictionEntries[0].getPredictionMsg();
+            if (predictionMsg) {
+                var stopName = predictionEntries[0].stopName;
+                if (!stopName) {
+                    // TEST!!!
+                    stopName = predictionEntries[0].stopId;
+                }
+                if (stopName) {
+                    stopName += ': ';
+                }
+                msg += '<div>' + stopName + predictionMsg + '</div>';
+            }
+        }
+            
+        msg += '<div>Vehicle: ' + this.id + '</div>';
+        msg += '<div>Bearing: ' + this.bearing + '</div>';
+        msg += '<div>Last updated: ' + this.updatedAt + '</div>';
+        return msg;
     }
 }
 
@@ -528,27 +587,26 @@ class VehicleMarker {
             verticesToLatitudeLongitude(vehicleLayerEntry.latitude, vehicleLayerEntry.longitude,
                 vehicleLayerEntry.bearing, this._vertices, this._latLongs);
             this._mapLayer.setLatLngs(this._latLongs);
-        }
-    }
-    
-    updateMarkerPopup(vehicleLayerEntry) {
-        if (this._mapLayer) {            
-            var popupMsg = '<div>';
-            var routeEntry = routes.get(vehicleLayerEntry.routeId);
-            if (routeEntry) {
-                popupMsg += routeEntry.name + ' ' + routeEntry.directionNames[vehicleLayerEntry.direction];
+            
+            var opacity;
+            var date = new Date(vehicleLayerEntry.updatedAt);
+            if (!Number.isNaN(date.getHours())) {
+                var ageMilliseconds = date.valueOf() - currentUpdateDate.valueOf();
+                ageMilliseconds = Math.max(0, ageMilliseconds);
+                ageMilliseconds = Math.min(ageMilliseconds, maxTimeStampFadeMilliSeconds);
+                var scale = ageMilliseconds / maxTimeStampFadeMilliSeconds;
+                opacity = 1 - scale * 0.8;
             }
             else {
-                popupMsg += vehicleLayerEntry.routeId;
+                opacity = 0.2;
             }
-            popupMsg += '</div>';
-            popupMsg += '<div>Vehicle: ' + vehicleLayerEntry.id + '</div>';
-            popupMsg += '<div>Bearing: ' + vehicleLayerEntry.bearing + '</div>';
-            popupMsg += '<div>Last updated: ' + vehicleLayerEntry.updatedAt + '</div>';
-            this._mapLayer.bindPopup(popupMsg);
+            
+            this._mapLayer.setStyle({ fillOpacity: opacity });
         }
     }
+
 }
+
 
 var lightRailVertices = [
     [0, 0],
@@ -630,7 +688,7 @@ var busVertices = [
     [0, 0],
     [busHWidth, -busHWidth],
     [busHWidth, -100],
-    [0, -100-busHWidth],
+    [0, -100 + busHWidth],
     [-busHWidth, -100],
     [-busHWidth, -busHWidth]
     //[0, 140 * 12 / 39.37]
@@ -666,6 +724,97 @@ class FerryMarker extends VehicleMarker {
 }
 
 
+class PredictionEntry {
+    constructor(jsonData) {
+        this._jsonData = jsonData;
+    }
+    
+    get routeId() { return this._jsonData.relationships.route.data.id; }
+    get routeName() {
+        var routeId = this.routeId;
+        var entry = routes.get(routeId);
+        if (entry) {
+            return entry.name;
+        }
+        return routeId;
+    }
+    
+    get stopId() { return this._jsonData.relationships.stop.data.id; }
+    get stopName() {
+        var stopId = this.stopId;
+        var entry = stops.get(stopId);
+        if (entry) {
+            return entry.name;
+        }
+        return '';
+    }
+    
+    get arrivalTime() { return this._jsonData.attributes.arrival_time; }
+    get deparatureTime() { return this._jsonData.attributes.departure_time; }
+    
+    getPredictionMsg() {        
+        var arrival = this.arrivalTime;
+        var departure = this.departureTime;
+        if (!arrival && !departure) {
+            return '';
+        }
+        
+        var msg = '';
+        if (arrival === departure) {
+            msg += dateToHHMMString(new Date(arrival), true) + ' DEP';
+        }
+        else {
+            if (arrival) {
+                msg += dateToHHMMString(new Date(arrival), true) + ' ARR';
+                if (departure) {
+                    msg += '  ';
+                }
+            }
+            if (departure) {
+                msg += dateToHHMMString(new Date(departure), true) + ' DEP';
+            }
+        }
+        return msg;
+    }
+}
+
+
+function dateToHHMMString(time, includeSeconds) {
+    if (!time) {
+        return '';
+    }
+    var hours = time.getHours();
+    var suffix = " AM";
+    if (hours > 12) {
+        hours -= 12;
+        suffix = " PM";
+    }
+    else if (hours === 12) {
+        suffix = " PM";
+    }
+    
+    hours = hours.toString();
+    if (hours.length === 1) {
+        hours = " " + hours;
+    }
+
+    var minutes = time.getMinutes().toString();
+    if (minutes.length === 1) {
+        minutes = "0" + minutes;
+    }
+    
+    var seconds = "";
+    if (includeSeconds) {
+        seconds = time.getSeconds().toString();
+        if (seconds.length === 1) {
+            seconds = "0" + seconds;
+        }
+        seconds = ":" + seconds;
+    }
+    
+    return hours + ':' + minutes + seconds + suffix;
+}
+
 function isIterable(obj) {
     if (!obj || (typeof obj === 'string') || (obj instanceof String)) {
         return false;
@@ -680,11 +829,47 @@ function fetchMBTA(path) {
 
 
 ///////////////////////////////////
+// Predictions
+///////////////////////////////////
+function fetchPredictionByStopId(stopId) {
+    var path = 'https://api-v3.mbta.com/predictions?filter%5Bstop%5D=';
+    path += stopId;
+    
+    return fetchMBTA(path)
+            .then((response) => response.json())
+            .then((myJson) => processPredictionResult(myJson));
+}
+
+function fetchPredictionByTripId(tripId) {
+    var path = 'https://api-v3.mbta.com/predictions?filter%5Btrip%5D=';
+    path += tripId;
+    
+    return fetchMBTA(path)
+            .then((response) => response.json())
+            .then((myJson) => processPredictionResult(myJson));
+}
+
+function processPredictionResult(json) {
+    var data = json.data;
+    var predictions = [];
+    data.forEach((dataItem) => {
+        predictions.push(processPredictionData(dataItem));
+    });
+    
+    return predictions;
+}
+
+function processPredictionData(data) {
+    return new PredictionEntry(data);
+}
+
+
+///////////////////////////////////
 // Stops
 ///////////////////////////////////
 
 function fetchStops(stopIds) {
-    var path = 'https://api-v3.mbta.com/stops?filter%5Bid%5D=';
+    var path = 'https://api-v3.mbta.com/stops?include=child_stops&filter%5Bid%5D=';
     if (isIterable(stopIds)) {
         var separator = '';
         for (let stopId of stopIds) {
@@ -705,21 +890,29 @@ function fetchStops(stopIds) {
 
 function processStopsResult(json) {
     var data = json.data;
+    var childStopIds = new Set();
+    var result;
     if (Array.isArray(data)) {
         var layerEntries = [];
         for (let i = 0; i < data.length; ++i) {
-            layerEntries.push(processStopData(data[i]));
+            layerEntries.push(processStopData(data[i], childStopIds));
         }
         
-        return layerEntries;
+        result = layerEntries;
     }
     else {
-        return processStopData(data);
+        result = processStopData(data, childStopIds);
     }
+    
+    if (childStopIds.size) {
+        stopLayerEntriesPromise(childStopIds);
+    }
+    
+    return result;
 }
 
 
-function processStopData(data) {
+function processStopData(data, childStopIds) {
     var stopId = data.id;
     var marker;
     switch (data.attributes.location_type) {
@@ -733,12 +926,28 @@ function processStopData(data) {
             break;
     }
     
-    if (marker && data.attributes.name) {
-        marker.bindPopup(data.attributes.name);
-    }
-    
     var layerEntry = new StopLayerEntry(stopId, data, marker);
     stops.set(stopId, layerEntry);
+    
+    // Want to load the predictions for the stop when the tooltip comes up.
+    if (marker) {
+        marker.bindTooltip(layerEntry.getStopMsgFromPredictions());
+        
+        marker.on('tooltipopen', (e) => {
+            marker.setTooltipContent(layerEntry.getStopMsgFromPredictions());
+            fetchPredictionByStopId(stopId)
+                    .then((predictionEntries) => {
+                        var msg = layerEntry.getStopMsgFromPredictions(predictionEntries);
+                        marker.setTooltipContent(msg);
+                    });            
+        });
+    }
+    
+    if (childStopIds) {
+        var childStops = data.relationships.child_stops.data;
+        childStops.forEach((childStop) => childStopIds.add(childStop.id));
+    }
+    
     return layerEntry;
 }
 
@@ -1114,6 +1323,22 @@ function processVehicleData(data) {
         
         layerEntry = new VehicleLayerEntry(id, data, marker);
         vehicles.set(id, layerEntry);
+            
+        // Want to load the predictions for the stop when the tooltip comes up.
+        var mapLayer = layerEntry.mapLayer;
+        if (mapLayer) {
+            mapLayer.bindTooltip(layerEntry.getVehicleMsgFromPredictions());
+
+            mapLayer.on('tooltipopen', (e) => {
+                mapLayer.setTooltipContent(layerEntry.getVehicleMsgFromPredictions());
+                fetchPredictionByTripId(layerEntry.tripId)
+                        .then((predictionEntries) => {
+                            var msg = layerEntry.getVehicleMsgFromPredictions(predictionEntries);
+                            mapLayer.setTooltipContent(msg);
+                        });            
+            });
+        }
+
     }
     else {
         layerEntry.updateJSONData(data);
@@ -1343,6 +1568,8 @@ function onUpdate() {
     clearMarks(vehicles);
     clearMarks(routes);
     
+    currentUpdateDate = Date.now();
+    
     routeLayerEntryPromise(activeBusRouteIds)
             .then((routeEntries) => {
                 routeEntries.forEach((entry) => {
@@ -1408,8 +1635,10 @@ function onUpdate() {
             .then((routeIds) => { 
                 ferryRouteIds = routeIds;
         
+                // Testing...
+                activeSubwayRouteIds = ['Red'];
+                
                 activeSubwayRouteIds = Array.from(subwayRouteIds);
-                //activeSubwayRouteIds = ['Red'];
                 activeBusRouteIds = Array.from(busRouteIds);
                 activeCommuterRailRouteIds = Array.from(commuterRailRouteIds);
                 activeFerryRouteIds = Array.from(ferryRouteIds);
