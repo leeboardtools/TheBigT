@@ -19,6 +19,13 @@
 
 (function() {
     'use strict';
+
+//
+// TODO:
+// Welcome message.
+// Save state.
+// Need to consolidate stops that are almost on top of each other so we can see
+// predictions for both directions.
     
 var shapes = new Map();
 var stops = new Map();
@@ -28,15 +35,31 @@ var routes = new Map();
 
 var map;
 
-var subwayRouteIds = [];
-var busRouteIds = [];
-var commuterRailRouteIds = [];
-var ferryRouteIds = [];
+const CAT_SUBWAY = 0;
+const CAT_BUS = 1;
+const CAT_COMMUTER_RAIL = 2;
+const CAT_FERRY = 3;
 
-var activeSubwayRouteIds = [];
-var activeBusRouteIds = [];
-var activeCommuterRailRouteIds = [];
-var activeFerryRouteIds = [];
+class UIRouteCategory {
+    constructor(idBase) {
+        this._idBase = idBase;
+        
+        this.routeIds = [];
+        this.activeRouteIds = new Set();
+        this.routeElementEntries = [];
+    }
+    
+    get idBase() { return this._idBase; }
+}
+
+var uiRouteCategories = [
+    new UIRouteCategory('subway'),
+    new UIRouteCategory('bus'),
+    new UIRouteCategory('commuterRail'),
+    new UIRouteCategory('ferry')
+];
+
+var isCloseSplash = true;
 
 var isStopsDisplayed = true;
 var isShapesDisplayed = true;
@@ -45,12 +68,6 @@ var isVehiclesDisplayed = true;
 var currentUpdateDate = new Date();
 
 var maxTimeStampFadeMilliSeconds = 3 * 60 * 1000;
-
-//
-// TODO:
-// UI for picking routes, enabling/disabling layers.
-// Welcome message.
-// Save state.
 
 
 class LayerEntry {
@@ -729,11 +746,17 @@ class PredictionEntry {
         this._jsonData = jsonData;
     }
     
+    get directionId() { return this._jsonData.attributes.direction_id; }
+    
     get routeId() { return this._jsonData.relationships.route.data.id; }
     get routeName() {
         var routeId = this.routeId;
         var entry = routes.get(routeId);
         if (entry) {
+            var direction = entry.directionNames[this.directionId];
+            if (direction) {
+                return entry.name + ' ' + direction;
+            }
             return entry.name;
         }
         return routeId;
@@ -1111,7 +1134,7 @@ function processShapeData(data, stopIdsNeeded) {
                 break;
             
             case ROUTE_BUS :
-                style.weight = 1;
+                style.weight = 2;
                 break;
                 
             case ROUTE_FERRY :
@@ -1437,7 +1460,7 @@ function processRoutesResultForLayer(json) {
 // This is the main updating.
 // This returns a promise whose argument is an array of RouteLayerEntry objects for the route ids.
 function routeLayerEntryPromise(routeIds) {
-    if (!Array.isArray(routeIds)) {
+    if (!isIterable(routeIds)) {
         routeIds = [ routeIds ];
     }
     
@@ -1570,27 +1593,27 @@ function onUpdate() {
     
     currentUpdateDate = Date.now();
     
-    routeLayerEntryPromise(activeBusRouteIds)
+    routeLayerEntryPromise(uiRouteCategories[CAT_BUS].activeRouteIds)
             .then((routeEntries) => {
                 routeEntries.forEach((entry) => {
                     entry.mark();
                 });
                 showAllMarked();
-                return routeLayerEntryPromise(activeCommuterRailRouteIds);
+                return routeLayerEntryPromise(uiRouteCategories[CAT_COMMUTER_RAIL].activeRouteIds);
             })
             .then((routeEntries) => {
                 routeEntries.forEach((entry) => {
                     entry.mark();
                 });
                 showAllMarked();
-                return routeLayerEntryPromise(activeSubwayRouteIds);
+                return routeLayerEntryPromise(uiRouteCategories[CAT_SUBWAY].activeRouteIds);
             })
             .then((routeEntries) => {
                 routeEntries.forEach((entry) => {
                     entry.mark();
                 });
                 showAllMarked();
-                return routeLayerEntryPromise(activeFerryRouteIds);
+                return routeLayerEntryPromise(uiRouteCategories[CAT_FERRY].activeRouteIds);
             })
             .then((routeEntries) => {
                 routeEntries.forEach((entry) => {
@@ -1602,8 +1625,154 @@ function onUpdate() {
                 showHideFromMarked(vehicles);
                 showHideFromMarked(routes);
                 
+                if (isCloseSplash && routeEntries.length) {
+                    document.getElementById('splash').classList.add('hide');
+                    document.getElementById('loading').classList.add('hide');
+                    isCloseSplash = true;
+                }
+                
                 console.log('finish onUpdate');
             });
+}
+
+
+function makeValidElementId(string) {
+    return string.replace(/\W/g, '_');
+}
+
+function addCheckboxItem(parent, id, text, isChecked, onclick) {
+    var container = document.createElement('label');
+    container.classList.add('checkboxcontainer');
+    container.id = id;
+    container.innerHTML = text;
+
+    var input = document.createElement('input');
+    input.type = 'checkbox';
+    input.id = '_input_' + id;
+    if (isChecked) {
+        input.checked = 'checked';
+    }
+    container.appendChild(input);
+    
+    input.onclick = onclick;
+    
+    var span = document.createElement('span');
+    span.classList.add('checkmark');
+    container.appendChild(span);
+
+    parent.appendChild(container);
+    
+    // This stops the onclick from going up the parent chain and triggering the main
+    // window.onclick, which closes the drop downs (we don't want the drop down to close
+    // just when a checkbox item is toggled.
+    container.onclick = function(event) {
+        event.stopPropagation();
+    };
+    
+    return {
+        container: container,
+        input: input,
+        span: span
+    };
+}
+
+function dropDownClick(elementId) {
+    var dropDownElement = document.getElementById(elementId);
+    closeDropDowns(dropDownElement);
+    dropDownElement.classList.toggle('show');
+    
+}
+
+function hideDropDownList(dropDownListElement) {
+    if (dropDownListElement.classList.contains('show')) {
+        dropDownListElement.classList.remove('show');
+    }
+}
+
+function closeDropDowns(except) {
+    var dropdowns = document.getElementsByClassName('dropdown-content');
+    for (var i = 0; i < dropdowns.length; ++i) { 
+        if (dropdowns[i] !== except) {
+            hideDropDownList(dropdowns[i]); 
+        }
+    }
+}
+
+function setupDropDownMenu(buttonElementId, dropDownElementId) {
+    var button = document.getElementById(buttonElementId);
+    button.onclick = () => dropDownClick(dropDownElementId);
+}
+
+
+function updateRoutesMenuState(uiCategory) {
+    uiCategory.routeElementEntries.forEach((entry) => {
+        entry.input.checked = uiCategory.activeRouteIds.has(entry.routeId);
+    });
+}
+
+function setupRoutesMenu(categoryIndex) {
+    var uiCategory = uiRouteCategories[categoryIndex];
+    var idBase = uiCategory.idBase;
+    var menuItem;
+
+    setupDropDownMenu(idBase + 'Btn', idBase + 'DropDownList');
+    
+    menuItem = document.getElementById(idBase + 'ShowAllMenu');
+    menuItem.onclick = () => {
+        uiCategory.activeRouteIds = new Set(uiCategory.routeIds);
+        updateRoutesMenuState(uiCategory);
+        onUpdate();
+        closeDropDowns();
+    };
+
+    menuItem = document.getElementById(idBase + 'HideAllMenu');
+    menuItem.onclick = () => {
+        uiCategory.activeRouteIds.clear();
+        updateRoutesMenuState(uiCategory);
+        onUpdate();
+        closeDropDowns();
+    };
+    
+    var dropDownList = document.getElementById(idBase + 'DropDownList');
+    uiCategory.routeIds.forEach((routeId) => {
+        var id = makeValidElementId(routeId);
+        var onClick = function(e) {
+            if (e.target.checked) {
+                uiCategory.activeRouteIds.add(routeId);
+            }
+            else {
+                uiCategory.activeRouteIds.delete(routeId);
+            }
+            onUpdate();
+        };
+        
+        var result = addCheckboxItem(dropDownList, id, routeId, false, onClick);
+        result.routeId = routeId;
+        uiCategory.routeElementEntries.push(result);
+    });
+    
+    updateRoutesMenuState(uiCategory);
+}
+
+
+function routeIdSort(a, b) {
+    var aNum = Number.parseInt(a);
+    if (!Number.isNaN(aNum)) {
+        var bNum = Number.parseInt(b);
+        if (!Number.isNaN(bNum)) {
+            return aNum - bNum;
+        }
+    }
+    
+    return a.toString().localeCompare(b.toString());
+}
+
+
+function setupUI() {
+    setupRoutesMenu(CAT_SUBWAY);
+    setupRoutesMenu(CAT_BUS);
+    setupRoutesMenu(CAT_COMMUTER_RAIL);
+    setupRoutesMenu(CAT_FERRY);
 }
 
 
@@ -1617,50 +1786,47 @@ function onUpdate() {
         
     fetchRouteIds([ROUTE_LIGHT_RAIL])
             .then((routeIds) => { 
-                subwayRouteIds = routeIds;
+                uiRouteCategories[CAT_SUBWAY].routeIds = routeIds;
                 return fetchRouteIds([ROUTE_HEAVY_RAIL]);
             })
             .then((routeIds) => { 
-                subwayRouteIds = subwayRouteIds.concat(routeIds); 
+                uiRouteCategories[CAT_SUBWAY].routeIds = uiRouteCategories[CAT_SUBWAY].routeIds.concat(routeIds); 
                 return fetchRouteIds([ROUTE_COMMUTER_RAIL]);
             })
             .then((routeIds) => { 
-                commuterRailRouteIds = routeIds; 
+                uiRouteCategories[CAT_COMMUTER_RAIL].routeIds = routeIds; 
                 return fetchRouteIds([ROUTE_BUS]);
             })
             .then((routeIds) => { 
-                busRouteIds = routeIds; 
+                uiRouteCategories[CAT_BUS].routeIds = routeIds; 
                 return fetchRouteIds([ROUTE_FERRY]);
             })
             .then((routeIds) => { 
-                ferryRouteIds = routeIds;
+                uiRouteCategories[CAT_FERRY].routeIds = routeIds;
+        
+                uiRouteCategories.forEach((uiCategory) => 
+                    uiCategory.routeIds.sort(routeIdSort));
         
                 // Testing...
-                activeSubwayRouteIds = ['Red'];
+                uiRouteCategories[CAT_SUBWAY].activeRouteIds.add('Red');
+
+                uiRouteCategories[CAT_SUBWAY].activeRouteIds = new Set(uiRouteCategories[CAT_SUBWAY].routeIds);
+                uiRouteCategories[CAT_BUS].activeRouteIds = new Set(uiRouteCategories[CAT_BUS].routeIds);
+                uiRouteCategories[CAT_COMMUTER_RAIL].activeRouteIds = new Set(uiRouteCategories[CAT_COMMUTER_RAIL].routeIds);
+                uiRouteCategories[CAT_FERRY].activeRouteIds = new Set(uiRouteCategories[CAT_FERRY].routeIds);
                 
-                activeSubwayRouteIds = Array.from(subwayRouteIds);
-                activeBusRouteIds = Array.from(busRouteIds);
-                activeCommuterRailRouteIds = Array.from(commuterRailRouteIds);
-                activeFerryRouteIds = Array.from(ferryRouteIds);
+                setupUI();
                 
+                isCloseSplash = false;
                 onUpdate();
+                isCloseSplash = true;
+                
+                console.log('route Ids loaded');
             });
     
     //isShapesDisplayed = false;
     
     setInterval(onUpdate, 5000);
 
-
-    // Test changing active routes...
-/*    window.onclick = function(event) {
-        if (activeBusRouteIds.length <= 1) {
-            activeBusRouteIds = Array.from(busRouteIds);
-        }
-        else {
-            activeBusRouteIds.length = 1;
-            activeBusRouteIds[0] = 78;
-        }
-        onUpdate();
-    };
-*/
+    
 }());
