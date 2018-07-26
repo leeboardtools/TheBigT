@@ -22,10 +22,22 @@
 
 //
 // TODO:
-// Welcome message.
 // Save state.
+// Splash screen menu command.
+// Settings:
+//      - Display buildings.
+//      - Estimate vehicle positions.
+//      
 // Need to consolidate stops that are almost on top of each other so we can see
 // predictions for both directions.
+//
+// Option to interpolate vehicle positions.
+//      Interpolation:
+//          - Have known location, time.
+//          - Have destination location, time.
+//          - Determine distance along shape.
+//          - Estimate current location along shape, based upon
+//              current time relative to last know time and destination time.
     
 var shapes = new Map();
 var stops = new Map();
@@ -34,6 +46,7 @@ var vehicles = new Map();
 var routes = new Map();
 
 var map;
+var storage = window.localStorage;
 
 const CAT_SUBWAY = 0;
 const CAT_BUS = 1;
@@ -47,9 +60,39 @@ class UIRouteCategory {
         this.routeIds = [];
         this.activeRouteIds = new Set();
         this.routeElementEntries = [];
+        
+        this.isLoadedFromStorage = false;
     }
     
     get idBase() { return this._idBase; }
+    
+    getStorageKey() { return 'uiRouteCategory_' + this.idBase; }
+    
+    loadFromStorage(storage) {
+        this.isLoadedFromStorage = false;
+        
+        var value = storage.getItem(this.getStorageKey());
+        if (value) {
+            try {
+                var jsonValue = JSON.parse(value);
+                if (jsonValue.activeRouteIds) {
+                    this.activeRouteIds.clear();
+                    jsonValue.activeRouteIds.forEach((routeId) => this.activeRouteIds.add(routeId));
+                    this.isLoadedFromStorage = true;
+                }
+            }
+            catch (e) {
+            }
+        }
+    }
+    
+    saveToStorage(storage) {
+        var jsonValue = {
+            activeRouteIds: Array.from(this.activeRouteIds)
+        };
+        var value = JSON.stringify(jsonValue);
+        storage.setItem(this.getStorageKey(), value);
+    }
 }
 
 var uiRouteCategories = [
@@ -1481,7 +1524,8 @@ function routeLayerEntryPromise(routeIds) {
         var routePromises = [];
         routeIdsNeeded.forEach((routeId) => {
             promise = fetchRouteLayerEntries([routeId])
-                    .then((entries) => routeEntries.concat(entries));
+                    .then((entries) => routeEntries = routeEntries.concat(entries)
+            );
             routePromises.push(promise);
         });
         promise = Promise.all(routePromises)
@@ -1583,6 +1627,12 @@ function showAllMarked() {
     //showIfMarked(routes);
 }
 
+
+function updateSplashStatusMsg(msg) {
+    var element = document.getElementById('load_status');
+    element.innerHTML = msg;
+}
+
 function onUpdate() {
     console.log('start onUpdate');
     clearMarks(stops);
@@ -1593,12 +1643,14 @@ function onUpdate() {
     
     currentUpdateDate = Date.now();
     
-    routeLayerEntryPromise(uiRouteCategories[CAT_BUS].activeRouteIds)
+    updateSplashStatusMsg("Loading subway route details...");
+    routeLayerEntryPromise(uiRouteCategories[CAT_SUBWAY].activeRouteIds)
             .then((routeEntries) => {
                 routeEntries.forEach((entry) => {
                     entry.mark();
                 });
                 showAllMarked();
+                updateSplashStatusMsg("Loading commuter rail route details...");
                 return routeLayerEntryPromise(uiRouteCategories[CAT_COMMUTER_RAIL].activeRouteIds);
             })
             .then((routeEntries) => {
@@ -1606,13 +1658,15 @@ function onUpdate() {
                     entry.mark();
                 });
                 showAllMarked();
-                return routeLayerEntryPromise(uiRouteCategories[CAT_SUBWAY].activeRouteIds);
+                updateSplashStatusMsg("Loading bus route details...");
+                return routeLayerEntryPromise(uiRouteCategories[CAT_BUS].activeRouteIds);
             })
             .then((routeEntries) => {
                 routeEntries.forEach((entry) => {
                     entry.mark();
                 });
                 showAllMarked();
+                updateSplashStatusMsg("Loading ferry route details...");
                 return routeLayerEntryPromise(uiRouteCategories[CAT_FERRY].activeRouteIds);
             })
             .then((routeEntries) => {
@@ -1625,10 +1679,11 @@ function onUpdate() {
                 showHideFromMarked(vehicles);
                 showHideFromMarked(routes);
                 
-                if (isCloseSplash && routeEntries.length) {
+                if (isCloseSplash) {
                     document.getElementById('splash').classList.add('hide');
                     document.getElementById('loading').classList.add('hide');
-                    isCloseSplash = true;
+                    document.getElementById('load_status').
+                    isCloseSplash = false;
                 }
                 
                 console.log('finish onUpdate');
@@ -1720,6 +1775,7 @@ function setupRoutesMenu(categoryIndex) {
     menuItem = document.getElementById(idBase + 'ShowAllMenu');
     menuItem.onclick = () => {
         uiCategory.activeRouteIds = new Set(uiCategory.routeIds);
+        uiCategory.saveToStorage(storage);
         updateRoutesMenuState(uiCategory);
         onUpdate();
         closeDropDowns();
@@ -1728,6 +1784,7 @@ function setupRoutesMenu(categoryIndex) {
     menuItem = document.getElementById(idBase + 'HideAllMenu');
     menuItem.onclick = () => {
         uiCategory.activeRouteIds.clear();
+        uiCategory.saveToStorage(storage);
         updateRoutesMenuState(uiCategory);
         onUpdate();
         closeDropDowns();
@@ -1743,6 +1800,7 @@ function setupRoutesMenu(categoryIndex) {
             else {
                 uiCategory.activeRouteIds.delete(routeId);
             }
+            uiCategory.saveToStorage(storage);
             onUpdate();
         };
         
@@ -1776,6 +1834,16 @@ function setupUI() {
 }
 
 
+
+//
+// Real start...
+//
+
+    uiRouteCategories.forEach((category) => category.loadFromStorage(storage));
+
+    setupDropDownMenu('settingsBtn', 'settingsDropDownList');
+    
+
     map = L.map('map');
     var layer = Tangram.leafletLayer({
         scene: 'scene.yaml',
@@ -1784,6 +1852,7 @@ function setupUI() {
     layer.addTo(map);
     map.setView([42.356402, -71.062471], 13);
         
+    updateSplashStatusMsg("Fetching subway route ids...");
     fetchRouteIds([ROUTE_LIGHT_RAIL])
             .then((routeIds) => { 
                 uiRouteCategories[CAT_SUBWAY].routeIds = routeIds;
@@ -1791,14 +1860,17 @@ function setupUI() {
             })
             .then((routeIds) => { 
                 uiRouteCategories[CAT_SUBWAY].routeIds = uiRouteCategories[CAT_SUBWAY].routeIds.concat(routeIds); 
+                updateSplashStatusMsg("Fetching commuter rail route ids...");
                 return fetchRouteIds([ROUTE_COMMUTER_RAIL]);
             })
             .then((routeIds) => { 
                 uiRouteCategories[CAT_COMMUTER_RAIL].routeIds = routeIds; 
+                updateSplashStatusMsg("Fetching bus route ids...");
                 return fetchRouteIds([ROUTE_BUS]);
             })
             .then((routeIds) => { 
                 uiRouteCategories[CAT_BUS].routeIds = routeIds; 
+                updateSplashStatusMsg("Fetching ferry route ids...");
                 return fetchRouteIds([ROUTE_FERRY]);
             })
             .then((routeIds) => { 
@@ -1807,13 +1879,13 @@ function setupUI() {
                 uiRouteCategories.forEach((uiCategory) => 
                     uiCategory.routeIds.sort(routeIdSort));
         
-                // Testing...
-                uiRouteCategories[CAT_SUBWAY].activeRouteIds.add('Red');
-
-                uiRouteCategories[CAT_SUBWAY].activeRouteIds = new Set(uiRouteCategories[CAT_SUBWAY].routeIds);
-                uiRouteCategories[CAT_BUS].activeRouteIds = new Set(uiRouteCategories[CAT_BUS].routeIds);
-                uiRouteCategories[CAT_COMMUTER_RAIL].activeRouteIds = new Set(uiRouteCategories[CAT_COMMUTER_RAIL].routeIds);
-                uiRouteCategories[CAT_FERRY].activeRouteIds = new Set(uiRouteCategories[CAT_FERRY].routeIds);
+                if (!uiRouteCategories[CAT_SUBWAY].isLoadedFromStorage) {
+                    uiRouteCategories[CAT_SUBWAY].activeRouteIds = new Set(uiRouteCategories[CAT_SUBWAY].routeIds);
+                }
+                
+                //uiRouteCategories[CAT_BUS].activeRouteIds = new Set(uiRouteCategories[CAT_BUS].routeIds);
+                //uiRouteCategories[CAT_COMMUTER_RAIL].activeRouteIds = new Set(uiRouteCategories[CAT_COMMUTER_RAIL].routeIds);
+                //uiRouteCategories[CAT_FERRY].activeRouteIds = new Set(uiRouteCategories[CAT_FERRY].routeIds);
                 
                 setupUI();
                 
