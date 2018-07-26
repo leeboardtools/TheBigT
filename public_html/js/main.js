@@ -22,11 +22,15 @@
 
 //
 // TODO:
-// Save state.
 // Splash screen menu command.
 // Settings:
 //      - Display buildings.
+//      - Display routes.
+//      - Display stops.
+//      - Display stations.
+//      - Display vehicles.
 //      - Estimate vehicle positions.
+//      - Save/restore the state for these settings.
 //      
 // Need to consolidate stops that are almost on top of each other so we can see
 // predictions for both directions.
@@ -1577,48 +1581,7 @@ function processRoutesResultForIds(json) {
 }
 
 
-// Let's see:
-// We want to basically filter by routes, so we grab the routes we want.
-// Then we grab the vehicles for those routes.
-// For each vehicle, we need to grab the shape.
 
-
-// Configuration UI:
-// Hierarchy check list:
-//  Subways:
-//      - All
-//      - None
-//      Blue Line
-//      Green Line
-//      Orange Line
-//      Red Line
-//
-//  Commuter Rail:
-//      - All
-//      - None
-//      Fitchburg
-//      Etc.
-//  
-//  Buses:
-//      - All
-//      - None
-//      
-//  Boats:
-//      - All
-//      - None
-//      
-//
-//  Style:
-//      Bus Stops: Diamond
-//      Subway Stops: Circle
-//      Commuter Rail Stops: Square
-//
-
-    // Some notes:
-    // Have color start to fade to gray as the data gets stale.
-    
-    // Inbound routes one color
-    // Outbound routes another color?
 function showAllMarked() {
     showIfMarked(shapes);
     showIfMarked(stops);
