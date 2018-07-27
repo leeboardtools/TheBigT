@@ -17,6 +17,7 @@
 
 /* global L, Tangram, Symbol, fetch, Promise, mbtaHeaders */
 
+var myApp = 
 (function() {
     'use strict';
 
@@ -1645,7 +1646,7 @@ function onUpdate() {
                 if (isCloseSplash) {
                     document.getElementById('splash').classList.add('hide');
                     document.getElementById('loading').classList.add('hide');
-                    document.getElementById('load_status').
+                    document.getElementById('load_status').classList.add('hide');
                     isCloseSplash = false;
                 }
                 
@@ -1713,6 +1714,17 @@ function closeDropDowns(except) {
         if (dropdowns[i] !== except) {
             hideDropDownList(dropdowns[i]); 
         }
+    }
+}
+
+function showElement(element, show) {
+    if (show) {
+        if (element.classList.contains('hide')) {
+            element.classList.remove('hide');
+        }
+    }
+    else {
+        element.classList.add('hide');
     }
 }
 
@@ -1797,6 +1809,22 @@ function setupUI() {
 }
 
 
+function onSplash() {
+    closeDropDowns();
+    
+    var splashElement = document.getElementById('splash');
+    if (!splashElement.classList.contains('hide')) {
+        return;
+    }
+    
+    showElement(splashElement, true);
+    
+    splashElement.onclick = function() {
+        showElement(splashElement, false);
+    };
+}
+
+
 
 //
 // Real start...
@@ -1863,5 +1891,8 @@ function setupUI() {
     
     setInterval(onUpdate, 5000);
 
-    
+
+    return {
+        onSplash: onSplash
+    };
 }());
