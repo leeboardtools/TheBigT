@@ -221,8 +221,10 @@ and open the template in the editor.
                     <button id="settingsBtn" class="dropbtn"><i class="material-icons">menu</i></button>
                     <div id="settingsDropDownList" class="dropdown-content right">
                         <p id="aboutMenu" onclick="myApp.onSplash()">Splash...</p>
-<!--                        <p id="ferryHideAllMenu">Hide all Ferry</p>
--->
+                        <label class="checkboxcontainer">
+                            <input id="estimateVehicleLocationsMenu" onclick="myApp.toggleItem('isEstimateVehicleLocations', 'estimateVehicleLocationsMenu')" type="checkbox">Estimate vehicle locations
+                            <span class="checkmark"></span>
+                        </label>
                     </div>
                 </div>
             </div>
@@ -254,6 +256,7 @@ and open the template in the editor.
         <!-- Main tangram library -->
         <script src="https://unpkg.com/tangram/dist/tangram.min.js"></script>
         
+        <script src="js/t_layers.js"></script>
         <script src="js/main.js"></script>
     </body>
 </html>
