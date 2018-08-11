@@ -35,6 +35,11 @@ and open the template in the editor.
                 background-color: rgba(250, 250, 250, 0.75);
             }
             
+            #splash p {
+                margin-left: 15%;
+                margin-right: 15%;
+            }
+            
             .ui {
                 position: absolute;
                 left:0;
@@ -225,6 +230,10 @@ and open the template in the editor.
                             <input id="estimateVehicleLocationsMenu" onclick="myApp.toggleItem('isEstimateVehicleLocations', 'estimateVehicleLocationsMenu')" type="checkbox">Estimate vehicle locations
                             <span class="checkmark"></span>
                         </label>
+                        <label class="checkboxcontainer">
+                            <input id="saveSettingsMenu" onclick="myApp.toggleItem('isSaveSettings', 'saveSettingMenu')" type="checkbox">Save settings
+                            <span class="checkmark"></span>
+                        </label>
                     </div>
                 </div>
             </div>
@@ -245,6 +254,10 @@ and open the template in the editor.
             <p>Javascript libraries by <a href="https://mapzen.com/tangram" target="_blank">Tangram</a> and <a href="https://leafletjs.com" target="_blank">Leaflet</a>.</p>
             <p>Encoded polyline decoded provided by the Leaflet plug-in <a href="https://github.com/jieter/Leaflet.encoded" target="_blank">https://github.com/jieter/Leaflet.encoded</a>.</p>
             <p>Icons by <a href="https://material.io/tools/icons/" target="_blank">Material Design</a>.</p>
+            <p>&nbsp;</p>
+            <p>Vehicles surrounded by a yellow border indicate the vehicle position is being estimated from the last
+                reported vehicle position and the predicted arrival of the vehicle at the next stop. 'Estimate vehicle locations'
+                must be checked for this to be performed.</p>
         </div>
         
         <!-- leaflet -->

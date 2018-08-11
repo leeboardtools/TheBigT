@@ -103,6 +103,10 @@ class UIRouteCategory {
     }
     
     saveToStorage(storage) {
+        if (!tLayers.isSaveSettings) {
+            return;
+        }
+        
         var jsonValue = {
             activeRouteIds: Array.from(this.activeRouteIds)
         };
@@ -442,6 +446,7 @@ function toggleItem(item, menuId) {
     loadTLayersFromStorage(storage);
     
     updateToggleMenuItem('isEstimateVehicleLocations', 'estimateVehicleLocationsMenu');
+    updateToggleMenuItem('isSaveSettings', 'saveSettingsMenu');
 
     setupDropDownMenu('settingsBtn', 'settingsDropDownList');
     

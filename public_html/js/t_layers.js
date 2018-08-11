@@ -17,6 +17,13 @@
 function setupTLayers(map) {
     'use strict';
     
+//
+// TODO:
+// Orange line likes to give trips with ids that start with 'ADDED' and
+// don't have a shape id, especially on weekends.
+// Could potentially do a shape search with route and direction, and pick what's returned?
+//  
+    
 var shapes = new Map();
 var stops = new Map();
 var trips = new Map();
@@ -24,6 +31,8 @@ var vehicles = new Map();
 var routes = new Map();
 
 var vehiclePredictionsToFetch = new Set();
+
+var dumpShapeInfo = false;
 
 const ROUTE_LIGHT_RAIL = 0;
 const ROUTE_HEAVY_RAIL = 1;
@@ -48,6 +57,7 @@ var tLayers = {
     isVehiclesDisplayed: true,
     
     isEstimateVehicleLocations: false,
+    isSaveSettings: true,
     maxTimeStampFadeMilliSeconds: 2 * 60 * 1000,
     vehiclePositionTimeToleranceMilliSeconds: 10000,
     
@@ -58,13 +68,17 @@ var tLayers = {
 
 function getSettingsAsJSON() {
     return {
-        isEstimateVehicleLocations: tLayers.isEstimateVehicleLocations
+        isEstimateVehicleLocations: tLayers.isEstimateVehicleLocations,
+        isSaveSettings: tLayers.isSaveSettings
     };
 }
 
 function updateSettingsFromJSON(json) {
     if (json.isEstimateVehicleLocations !== undefined) {
         tLayers.isEstimateVehicleLocations = json.isEstimateVehicleLocations;
+    }
+    if (json.isSaveSettings !== undefined) {
+        tLayers.isSaveSettings = json.isSaveSettings;
     }
 }
 
@@ -366,12 +380,29 @@ class ShapeLayerEntry extends LayerEntry {
     }
     
     getVertexIndexForStopId(stopId) {
-        return this._stopIdVertexIndices.get(stopId);
+        return (this._stopIdVertexIndices) ? this._stopIdVertexIndices.get(stopId) : undefined;
+    }
+    
+    getVertexX(vertexIndex) {
+        return this._vertexXs[vertexIndex];
+    }
+    getVertexY(vertexIndex) {
+        return this._vertexYs[vertexIndex];
+    }
+    
+    getSegmentLength(segmentIndex) {
+        return this._segmentLengths[segmentIndex];
+    }
+    getSegmentStopId(segmentIndex) {
+        return this._segmentStopIds[segmentIndex];
     }
     
     stopsUpdated() {
         this._segmentLengths = [];
         this._stopIdVertexIndices = new Map();
+        this._segmentStopIds = [];
+        this._vertexXs = [];
+        this._vertexYs = [];
 
         var jsonStops = this.jsonData.relationships.stops.data;
         
@@ -379,6 +410,9 @@ class ShapeLayerEntry extends LayerEntry {
         // Walk along the vertices until we get to one close to the stop.
         var lastX = longitudeToX(this._vertices[0][1]);
         var lastY = latitudeToY(this._vertices[0][0]);
+        this._vertexXs.push(lastX);
+        this._vertexYs.push(lastY);
+        
         this._stopIdVertexIndices.set(jsonStops[0].id, 0);
         
         var vertexCount = this._vertices.length;
@@ -389,17 +423,22 @@ class ShapeLayerEntry extends LayerEntry {
             return;
         }
         
-        var prevStopId = jsonStops[0].id;
-
-        var stopTolerance = 20;
         
+        var stopTolerance = 200;
+        
+        var lastDistance = Number.MAX_VALUE;
+
         for (let v = 1; v < vertexCount; ++v) {
             var x = longitudeToX(this._vertices[v][1]);
             var y = latitudeToY(this._vertices[v][0]);
+            this._vertexXs.push(x);
+            this._vertexYs.push(y);
+            
             var dx = x - lastX;
             var dy = y - lastY;
             var segLength = Math.sqrt(dx * dx + dy * dy);
             this._segmentLengths.push(segLength);
+            this._segmentStopIds.push(jsonStops[nextStopIndex].id);
             
             if (nextStopIndex >= lastStopIndex) {
                 continue;
@@ -409,30 +448,104 @@ class ShapeLayerEntry extends LayerEntry {
                 continue;
             }
             
-            var num = dy * stopEntry.x - dx * stopEntry.y + x * lastY - y * lastX;
-            var distance = num / segLength;
-            if (distance < stopTolerance) {
-                this._stopIdVertexIndices.set(jsonStops[nextStopIndex].id, v);
-                prevStopId = jsonStops[nextStopIndex].id;
-                
-                ++nextStopIndex;
-                if (nextStopIndex < lastStopIndex) {
-                    stopEntry = stops.get(jsonStops[nextStopIndex].id);
-                    if (!stopEntry) {
-                        console.log("ShapeLayerEntry.stopsUpdated() stop entry '" + jsonStops[nextStopIndex].id + "' not found.");
-                        return;
-                    }
+            lastX = x;
+            lastY = y;
+
+            var distance = this.distanceToSegment(v - 1, stopEntry.x, stopEntry.y);
+            if (distance > stopTolerance) {
+                if (lastDistance === Number.MAX_VALUE) {
+                    continue;
+                }
+            }
+            else {
+                if (distance < lastDistance) {
+                    // Still going...
+                    lastDistance = distance;
+                    continue;
                 }
             }
             
-            lastX = x;
-            lastY = y;
+            // The vertex we want is actually the previous vertex.
+            this._stopIdVertexIndices.set(jsonStops[nextStopIndex].id, v - 1);
+            ++nextStopIndex;
+            
+            stopEntry = stops.get(jsonStops[nextStopIndex].id);
+            if (!stopEntry) {
+                console.log("ShapeLayerEntry.stopsUpdated() stop entry '" + jsonStops[nextStopIndex].id + "' not found.");
+                return;
+            }
+            
+            this._segmentStopIds[v - 1] = jsonStops[nextStopIndex].id;
+            
+            lastDistance = Number.MAX_VALUE;
+        }
+        
+        if ((nextStopIndex + 1) === lastStopIndex) {
+            // Didn't finish the last vertex...
+            this._stopIdVertexIndices.set(jsonStops[nextStopIndex].id, vertexCount - 2);
+            ++nextStopIndex;
         }
         this._stopIdVertexIndices.set(jsonStops[lastStopIndex].id, vertexCount - 1);
 
         if (nextStopIndex !== lastStopIndex) {
             console.log("ShapeLayerEntry.stopsUpdated() nextStopIndex = " + nextStopIndex + " lastStopIndex = " + lastStopIndex);
         }
+        
+        if (dumpShapeInfo) {
+            console.log("ShapeInfo Dump");
+            console.log("Stops:");
+            jsonStops.forEach((stop) => {
+                var stopEntry = stops.get(stop.id);
+                var stopVertex = this._stopIdVertexIndices.get(stop.id);
+                if (stopEntry) {
+                    console.log("Stop:\t" + stop.id 
+                            + "\t" + stopEntry.latitude + "\t" + stopEntry.longitude + "\t"
+                            + "\t" + stopEntry.x + "\t" + stopEntry.y + "\t"
+                            + "\t" + stopVertex);
+                }
+            });
+            console.log("Vertices:");
+            var segmentCount = vertexCount - 1;
+            for (let v = 0; v < segmentCount; ++v) {
+                console.log("Vertex:\t" + v 
+                        + "\t" + this._vertices[v][0] + "\t" + this._vertices[v][1] + "\t"
+                        + "\t" + this._vertexXs[v] + "\t" + this._vertexYs[v] + "\t"
+                        + "\t" + this._segmentStopIds[v] + "\t"
+                        + "\t" + this._segmentLengths[v]);
+            }
+            console.log("Vertex:\t" + segmentCount
+                    + "\t" + this._vertices[segmentCount][0] + "\t" + this._vertices[segmentCount][1] + "\t"
+                    + "\t" + this._vertexXs[segmentCount] + "\t" + this._vertexYs[segmentCount]);
+            console.log("End ShapeInfoDump");
+        }
+    }
+    
+    
+    distanceToSegment(segmentIndex, x, y) {
+        var segDx = this._vertexXs[segmentIndex + 1] - this._vertexXs[segmentIndex];
+        var segDy = this._vertexYs[segmentIndex + 1] - this._vertexYs[segmentIndex];
+        var dx = x - this._vertexXs[segmentIndex];
+        var dy = y - this._vertexYs[segmentIndex];
+        var segmentLength = this._segmentLengths[segmentIndex];
+        var u = (segmentLength > 1) ? (dx * segDx + dy * segDy) / (segmentLength * segmentLength) : -1;
+        if (u < 0) {
+            return Math.sqrt(dx * dx + dy * dy);
+        }
+        else if (u > 1) {
+            return this.distanceToVertex(segmentIndex + 1, x, y);
+        }
+        
+        var xSeg = segDx * u;
+        var ySeg = segDy * u;
+        dx -= xSeg;
+        dy -= ySeg;
+        return Math.sqrt(dx * dx + dy * dy);
+    }
+    
+    distanceToVertex(vertexIndex, x, y) {
+        var dx = x - this._vertexXs[vertexIndex];
+        var dy = y - this._vertexYs[vertexIndex];
+        return Math.sqrt(dx * dx + dy * dy);
     }
 };
 
@@ -559,6 +672,7 @@ class VehicleLayerEntry extends LayerEntry {
     
     get routeId() { return this.jsonData.relationships.route.data.id; }
     get tripId() { return this.jsonData.relationships.trip.data.id; }
+    get currentStatus() { return this.jsonData.attributes.current_status; }
     
     get color() { return this.jsonData.attributes.color; }
     get direction() { return this.jsonData.attributes.direction_id; }
@@ -678,6 +792,7 @@ class VehicleMarker {
         verticesToLatitudeLongitude(42, -72, 0, vertices, this._latLongs);
         
         this._mapLayer = L.polygon(this._latLongs, options);
+        this._positionEstimated = false;
     }
     
     get mapLayer() { return this._mapLayer; }
@@ -703,11 +818,20 @@ class VehicleMarker {
                 opacity = 0.2;
             }
             
-            this._mapLayer.setStyle({ fillOpacity: opacity });
+            this._mapLayer.setStyle({ 
+                stroke: this._positionEstimated,
+                color: 'yellow',
+                weight: 1,
+                opacity: 1,
+                fillOpacity: opacity 
+            });
         }
     }
 
     _estimateVehiclePosition(vehicleLayerEntry) {
+        
+        this._positionEstimated = false;
+        
         if (!tLayers.isEstimateVehicleLocations) {
             return false;
         }
@@ -715,7 +839,7 @@ class VehicleMarker {
         if (!vehicleLayerEntry.predictions || !vehicleLayerEntry.predictions.length) {
             return false;
         }
-
+        
         var prediction = vehicleLayerEntry.predictions[0];
         
         // Reported position and time.
@@ -755,48 +879,101 @@ class VehicleMarker {
             }
         }
         var nextStopVertexIndex = shapeEntry.getVertexIndexForStopId(stopId);
-        if (nextStopVertexIndex === undefined) {
+        // Both undefined and index === 0 are return false.
+        if (!nextStopVertexIndex) {
             return false;
         }
         
         var latitude = reportedLatitude;
         var longitude = reportedLongitude;
         
-        // To find the location along the shape, we know the current vehicle stop
-        // We know the stop the vehicle is at or is heading towards.
-        // We need to know the distances along the segments of the shapes,
-        // For the shapes, have an array of deltas between vertices,
-        // and then a map of the keys to the vertex indices.
-        // Then starting from the predicted location, walk backwards
-        // looking for the segment closest to the reported position.
-        // Stop at the previous stop.
-        // We then have the segment containing the reported position, along with
-        // the fraction along that segment. While we were doing this we were
-        // maintaining the total distance.
-        // We can then figure out where along the path we should be, and then
-        // walk back from the prediction stop.
+        var distanceFromStop = 0;
+
+        var minDistance = Number.MAX_VALUE;
+        var minSegmentIndex = -1;
+        var minDistanceFromStop = 0;
         
-        // Destination stop gives vertex index of shape.
-        // From there work our way backwards along the segments of the shape,
-        // tracking the distance.
-        // Looking for the point where the vehicle is close to the segment.
-        // At the 'close' point, figure out the fraction along the segment where
-        // the vehicle is projected, and add that to the total distance.
-        // Figure out the distance from the predicted stop where we should be now,
-        // Work our way back along the segments until that distance is covered.
-        // Handle the fractional position.
-        // Calc x, y position,
+        var vehicleX = longitudeToX(vehicleLayerEntry.longitude);
+        var vehicleY = latitudeToY(vehicleLayerEntry.latitude);
         
+        var segmentIndex = nextStopVertexIndex - 1;
+        while (segmentIndex > 0) {
+            if (shapeEntry.getSegmentStopId(segmentIndex) !== stopId) {
+                break;
+            }
+            
+            var distanceToSegment = shapeEntry.distanceToSegment(segmentIndex, vehicleX, vehicleY);
+            if (distanceToSegment < minDistance) {
+                minSegmentIndex = segmentIndex;
+                minDistance = distanceToSegment;
+                minDistanceFromStop = distanceFromStop;
+            }
+
+            distanceFromStop += shapeEntry.getSegmentLength(segmentIndex);
+            --segmentIndex;
+        }
         
-        // Distance along shape between current position and prediction.
-        // Interpolate distance, determine latitude/longitude.
-        // Update position.
+        if (minSegmentIndex < 0) {
+            return false;
+        }
+        
+        distanceFromStop = minDistanceFromStop;
+        distanceFromStop += shapeEntry.distanceToVertex(minSegmentIndex + 1, vehicleX, vehicleY);
+        
+        var timeFraction = (predictionTime - tLayers.currentUpdateDate) / deltaTime;
+        if (timeFraction < 0) {
+            timeFraction = 0;
+        }
+        var estimatedDistanceFromStop = distanceFromStop * timeFraction;
+        
+        var bearing = vehicleLayerEntry.bearing;
+        
+        segmentIndex = nextStopVertexIndex - 1;
+        var u = 0;
+        while (estimatedDistanceFromStop > 0) {
+            var segmentLength = shapeEntry.getSegmentLength(segmentIndex);
+            if (segmentLength >= estimatedDistanceFromStop) {
+                u = estimatedDistanceFromStop / segmentLength;
+                break;
+            }
+
+            estimatedDistanceFromStop -= segmentLength;
+
+            --segmentIndex;
+            
+            if (segmentIndex < 0) {
+                // Something bad happened...
+                return false;
+            }
+        }
+                
+        var endX = shapeEntry.getVertexX(segmentIndex + 1);
+        var endY = shapeEntry.getVertexY(segmentIndex + 1);
+        var startX = shapeEntry.getVertexX(segmentIndex);
+        var startY = shapeEntry.getVertexY(segmentIndex);
+        var dx = startX - endX;
+        var dy = startY - endY;
+        if (estimatedDistanceFromStop < 10) {
+            // Close enough, just move to the end vertex of the segment.
+            vehicleX = endX;
+            vehicleY = endY;
+        }
+        else {
+            vehicleX = endX + u * dx;
+            vehicleY = endY + u * dy;
+        }
+        bearing = 270 - Math.atan2(dy, dx) / degToRad;
+        
+        longitude = xToLongitude(vehicleX);
+        latitude = yToLatitude(vehicleY);
+        
         verticesToLatitudeLongitude(latitude, longitude,
-            vehicleLayerEntry.bearing, this._vertices, this._latLongs);
+            bearing, this._vertices, this._latLongs);
         this._mapLayer.setLatLngs(this._latLongs);
         
-        return false;
-        //return true;
+        this._positionEstimated = true;
+        
+        return true;
     }
 }
 
@@ -1774,7 +1951,7 @@ function routeLayerEntryPromise(routeIds) {
         var routesPerFetchCount = 5;
         var count = routeIdsNeeded.length;
         for (let i = 0; i < count; ) {
-            var remainingCount = count - 1;
+            var remainingCount = count;
             var toFetchCount = Math.min(remainingCount, routesPerFetchCount);
             promise = fetchRouteLayerEntries(routeIdsNeeded.slice(i, i + toFetchCount))
                     .then((entries) => routeEntries = routeEntries.concat(entries)
