@@ -33,6 +33,7 @@ var routes = new Map();
 var vehiclePredictionsToFetch = new Set();
 
 var dumpShapeInfo = false;
+//dumpShapeInfo = true;
 
 const ROUTE_LIGHT_RAIL = 0;
 const ROUTE_HEAVY_RAIL = 1;
@@ -275,7 +276,11 @@ class StopLayerEntry extends LayerEntry {
     }
     
     getStopMsgFromPredictions(predictionEntries) {
-        var msg = '<div>' + this.name + '</div>';
+        var msg = '<div>' + this.name;
+        if (this.jsonData.attributes.location_type === 0) {
+            msg += ' (' + this.id + ')';
+        }
+        msg += '</div>';
         if (predictionEntries) {
             // We only want the first prediction for each route.
             var visitedRoutes = new Set();
@@ -492,7 +497,7 @@ class ShapeLayerEntry extends LayerEntry {
         }
         
         if (dumpShapeInfo) {
-            console.log("ShapeInfo Dump");
+            console.log("ShapeInfo Dump:\t" + this.id);
             console.log("Stops:");
             jsonStops.forEach((stop) => {
                 var stopEntry = stops.get(stop.id);
@@ -672,6 +677,7 @@ class VehicleLayerEntry extends LayerEntry {
     
     get routeId() { return this.jsonData.relationships.route.data.id; }
     get tripId() { return this.jsonData.relationships.trip.data.id; }
+    get stopId() { return this.jsonData.relationships.stop.data.id; }
     get currentStatus() { return this.jsonData.attributes.current_status; }
     
     get color() { return this.jsonData.attributes.color; }
@@ -768,8 +774,16 @@ class RouteLayerEntry extends LayerEntry {
     }
     
     get routeType() { return this.jsonData.attributes.type; }
-    get name() { return (this.jsonData.attributes.long_name) 
-        ? this.jsonData.attributes.long_name : this.jsonData.attributes.short_name; }
+    get name() {
+        var attributes = this.jsonData.attributes;
+        var text = '';
+        if (attributes.type === ROUTE_BUS) {
+            text = "Bus " + this.id + ": ";
+        }
+        text += (attributes.long_name) 
+            ? attributes.long_name : attributes.short_name; 
+        return text;
+    }
     get directionNames() { return this.jsonData.attributes.direction_names; }
     
     mark() {
@@ -827,8 +841,30 @@ class VehicleMarker {
             });
         }
     }
+    
+    _clearEstimateState() {
+        this._lastBearing = undefined;
+    }
+    
+    _trackMe(vehicleLayerEntry, msg2) {
+        this._trackId = (this._trackId | 0) + 1;
+        var vehicleX = longitudeToX(vehicleLayerEntry.longitude);
+        var vehicleY = latitudeToY(vehicleLayerEntry.latitude);
+        
+        var msg = '\tTrackMe: ' + this._trackId;
+        msg += '\t' + new Date().toLocaleString();
+        msg += '\t' + vehicleLayerEntry.id + '\t' + vehicleLayerEntry.routeId;
+        msg += '\t' + vehicleLayerEntry.currentStatus + '\t' + vehicleLayerEntry.stopId;
+        msg += '\t' + vehicleLayerEntry.updatedAt;
+        msg += '\t' + vehicleX + '\t' + vehicleY + '\t' + vehicleLayerEntry.bearing + '\t\t' + msg2;
+        console.log(msg);
+    }
 
     _estimateVehiclePosition(vehicleLayerEntry) {
+        var isTrackMe = false;
+        //isTrackMe = (vehicleLayerEntry.routeId === '78') && (vehicleLayerEntry.direction === '1');
+        //isTrackMe = (vehicleLayerEntry.id === 'y1426');
+        //isTrackMe = (vehicleLayerEntry.id === 'y1892') && this._enableTrackMe;
         
         this._positionEstimated = false;
         
@@ -837,6 +873,10 @@ class VehicleMarker {
         }
         
         if (!vehicleLayerEntry.predictions || !vehicleLayerEntry.predictions.length) {
+            if (isTrackMe) {
+                this._trackMe(vehicleLayerEntry, 'No predictions');
+            }
+            this._clearEstimateState();
             return false;
         }
         
@@ -847,27 +887,40 @@ class VehicleMarker {
         var reportedLongitude = vehicleLayerEntry.longitude;
         var reportedTime = new Date(vehicleLayerEntry.updatedAt).valueOf();
         if ((tLayers.currentUpdateDate - reportedTime) < tLayers.vehiclePositionTimeToleranceMilliSeconds) {
+            if (isTrackMe) {
+                this._trackMe(vehicleLayerEntry, 'Last updated time current');
+            }
+            this._clearEstimateState();
             return false;
         }
         
-        // Prediction position and time.
-        var predictionLatitude = prediction.latitude;
-        var predictionLongitude = prediction.longitude;
+
         var predictionTime = new Date(prediction.time).valueOf();
-        
         var deltaTime = predictionTime - reportedTime;
         if (deltaTime < tLayers.vehiclePositionTimeToleranceMilliSeconds) {
+            if (isTrackMe) {
+                this._trackMe(vehicleLayerEntry, 'Last updated time close to prediction time');
+            }
+            this._clearEstimateState();
             return false;
         }
         
         var tripId = vehicleLayerEntry.tripId;
         var tripEntry = trips.get(tripId);
         if (!tripEntry) {
+            if (isTrackMe) {
+                this._trackMe(vehicleLayerEntry, 'No trip entry\t' + tripId);
+            }
+            this._clearEstimateState();
             return false;
         }
         
         var shapeEntry = shapes.get(tripEntry.shapeId);
         if (!shapeEntry) {
+            if (isTrackMe) {
+                this._trackMe(vehicleLayerEntry, 'No shape entry\t' + tripEntry.shapeId);
+            }
+            this._clearEstimateState();
             return false;
         }
         
@@ -881,27 +934,26 @@ class VehicleMarker {
         var nextStopVertexIndex = shapeEntry.getVertexIndexForStopId(stopId);
         // Both undefined and index === 0 are return false.
         if (!nextStopVertexIndex) {
+            if (isTrackMe) {
+                this._trackMe(vehicleLayerEntry, 'nextStopVertexIndex\t' + nextStopVertexIndex);
+            }
+            this._clearEstimateState();
             return false;
         }
         
         var latitude = reportedLatitude;
         var longitude = reportedLongitude;
         
-        var distanceFromStop = 0;
-
-        var minDistance = Number.MAX_VALUE;
-        var minSegmentIndex = -1;
-        var minDistanceFromStop = 0;
-        
         var vehicleX = longitudeToX(vehicleLayerEntry.longitude);
         var vehicleY = latitudeToY(vehicleLayerEntry.latitude);
         
         var segmentIndex = nextStopVertexIndex - 1;
+        var minDistance = shapeEntry.distanceToSegment(segmentIndex, vehicleX, vehicleY);
+        var minSegmentIndex = segmentIndex;
+        var minDistanceFromStop = 0;
+        var distanceFromStop = shapeEntry.getSegmentLength(segmentIndex);
+        --segmentIndex;
         while (segmentIndex > 0) {
-            if (shapeEntry.getSegmentStopId(segmentIndex) !== stopId) {
-                break;
-            }
-            
             var distanceToSegment = shapeEntry.distanceToSegment(segmentIndex, vehicleX, vehicleY);
             if (distanceToSegment < minDistance) {
                 minSegmentIndex = segmentIndex;
@@ -913,22 +965,57 @@ class VehicleMarker {
             --segmentIndex;
         }
         
-        if (minSegmentIndex < 0) {
+        if ((minSegmentIndex < 0) || (minDistance > 500)) {
+            if (minSegmentIndex >= 0) {
+                if (isTrackMe) {
+                    this._trackMe(vehicleLayerEntry, 'Not close to any segment\t' + minDistance + '\t' + vehicleLayerEntry.currentStatus);
+                }
+/*                console.log("To far from path: " + minDistance 
+                        + " Route: " + vehicleLayerEntry.routeId 
+                        + " Stop: " + stopId 
+                        + " Current Status:" + vehicleLayerEntry.currentStatus);
+*/
+            }
+            this._clearEstimateState();
             return false;
         }
         
-        distanceFromStop = minDistanceFromStop;
-        distanceFromStop += shapeEntry.distanceToVertex(minSegmentIndex + 1, vehicleX, vehicleY);
+        var dbgDistanceFromStop = distanceFromStop;
         
-        var timeFraction = (predictionTime - tLayers.currentUpdateDate) / deltaTime;
+        distanceFromStop = minDistanceFromStop;
+        var distanceFromVertex = shapeEntry.distanceToVertex(minSegmentIndex + 1, vehicleX, vehicleY);
+        distanceFromStop += distanceFromVertex;
+        
+        var timeFraction = (predictionTime - Date.now()) / deltaTime;
         if (timeFraction < 0) {
             timeFraction = 0;
         }
         var estimatedDistanceFromStop = distanceFromStop * timeFraction;
+        var initialEstimatedDistanceFromStop = estimatedDistanceFromStop;
         
         var bearing = vehicleLayerEntry.bearing;
         
+        // TEST!!!
+/*        if (isTrackMe) {
+            // 107
+            estimatedDistanceFromStop = initialEstimatedDistanceFromStop = 549.26913025039;
+            timeFraction = 0.55784962406015;
+            minDistanceFromStop = 972.271477071586;
+            distanceFromVertex = 12.3471487378034;
+            minDistance = 8.24545051286719;
+            distanceFromStop = minDistanceFromStop + distanceFromVertex;
+            nextStopVertexIndex = 125;
+            minSegmentIndex = 113;
+            vehicleX = -2714.55125327073;
+            vehicleY = 301.964103121892;
+            stopId = '77';
+            stopEntry = stops.get(stopId);
+        }
+ */       
+
+        var endSegmentIndex = nextStopVertexIndex;
         segmentIndex = nextStopVertexIndex - 1;
+        var startSegmentIndex = segmentIndex;
         var u = 0;
         while (estimatedDistanceFromStop > 0) {
             var segmentLength = shapeEntry.getSegmentLength(segmentIndex);
@@ -939,16 +1026,35 @@ class VehicleMarker {
 
             estimatedDistanceFromStop -= segmentLength;
 
+            if (segmentLength > 0) {
+                endSegmentIndex = segmentIndex;
+            }
+            
             --segmentIndex;
             
             if (segmentIndex < 0) {
                 // Something bad happened...
+                if (isTrackMe) {
+                    var msg = 'segmentIndexNegative';
+                    msg += '\t' + initialEstimatedDistanceFromStop;
+                    msg += '\t' + timeFraction;
+                    msg += '\t' + minDistanceFromStop;
+                    msg += '\t' + distanceFromVertex;
+                    msg += '\t' + minDistance;
+                    msg += '\t' + nextStopVertexIndex;
+                    msg += '\t' + minSegmentIndex;
+                    msg += '\t' + stopId;
+                    msg += '\t' + stopEntry.name;
+                    msg += '\t' + prediction.time;
+                    
+                    this._trackMe(vehicleLayerEntry, msg);
+                }
                 return false;
             }
         }
                 
-        var endX = shapeEntry.getVertexX(segmentIndex + 1);
-        var endY = shapeEntry.getVertexY(segmentIndex + 1);
+        var endX = shapeEntry.getVertexX(endSegmentIndex);
+        var endY = shapeEntry.getVertexY(endSegmentIndex);
         var startX = shapeEntry.getVertexX(segmentIndex);
         var startY = shapeEntry.getVertexY(segmentIndex);
         var dx = startX - endX;
@@ -962,16 +1068,74 @@ class VehicleMarker {
             vehicleX = endX + u * dx;
             vehicleY = endY + u * dy;
         }
-        bearing = 270 - Math.atan2(dy, dx) / degToRad;
         
+        if (dx && dy) {
+            bearing = 270 - Math.atan2(dy, dx) / degToRad;
+        }
+        else if (this._lastBearing !== undefined) {
+            bearing = this._lastBearing;
+        }
+        
+        if (isTrackMe) {
+            var msg = 'Updating Position:';
+            msg += '\t' + initialEstimatedDistanceFromStop;
+            msg += '\t' + timeFraction;
+            msg += '\t' + minDistanceFromStop;
+            msg += '\t' + distanceFromVertex;
+            msg += '\t' + minDistance;
+            msg += '\t' + nextStopVertexIndex;
+            msg += '\t' + minSegmentIndex;
+            msg += '\t' + stopId;
+            msg += '\t' + stopEntry.name;
+            msg += '\t' + prediction.time;
+            msg += '\t';
+            msg += '\t' + vehicleX + '\t' + vehicleY + '\t' + bearing;
+            msg += '\t' + dx + '\t' + dy;
+            msg += '\t' + endSegmentIndex + '\t' + segmentIndex;
+            
+            if (this._lastStopId) {
+                msg += '\t' + this._lastVehicleStopId;
+                msg += '\t' + this._lastStopId;
+            }
+
+            this._trackMe(vehicleLayerEntry, msg);
+        }
+        
+        if (isTrackMe) {
+            var currentId = Number.parseInt(stopId);
+            var lastId = Number.parseInt(this._lastStopId);
+            if (!Number.isNaN(currentId) && !Number.isNaN(lastId)) {
+                if (currentId < 1000 && lastId < 1000 && currentId < lastId) {
+                    if (stopId < this._lastStopId) {
+                        console.log("Current Predictions:");
+                        vehicleLayerEntry.predictions.forEach((prediction) => {
+                            console.log(prediction.stopSequence + '\t' + prediction.stopId + '\t' + prediction.time);
+                        });
+                        console.log("Prev Predictions:");
+                        this._lastPredictions.forEach((prediction) => {
+                            console.log(prediction.stopSequence + '\t' + prediction.stopId + '\t' + prediction.time);
+                        });
+                    }
+                }
+            }
+        }
+        
+        // 
         longitude = xToLongitude(vehicleX);
         latitude = yToLatitude(vehicleY);
         
         verticesToLatitudeLongitude(latitude, longitude,
             bearing, this._vertices, this._latLongs);
         this._mapLayer.setLatLngs(this._latLongs);
+        this._lastBearing = bearing;
         
         this._positionEstimated = true;
+        
+        this._lastVehicleStopId = vehicleLayerEntry.stopId;
+        this._lastStopId = stopId;
+        this._lastPredictions = vehicleLayerEntry.predictions;
+        
+        this._enableTrackMe = vehicleY >= -880;
         
         return true;
     }
@@ -1198,6 +1362,7 @@ class PredictionEntry {
         }
         return '';
     }
+    get stopSequence() { return this._jsonData.attributes.stop_sequence; }
     
     get tripId() { return this._jsonData.relationships.trip.data.id; }
     
@@ -1232,6 +1397,10 @@ class PredictionEntry {
         }
         return msg;
     }
+}
+
+function comparePredictionEntryStopSequence(a, b) {
+    return a.stopSequence - b.stopSequence;
 }
 
 
@@ -2057,6 +2226,9 @@ function processTripIdsToFetch() {
                     
                     for (let i = batch.length - 1; i >= 0; --i) {
                         let layerEntry = batch[i];
+                        if (predictionsForVehicles[i]) {
+                            predictionsForVehicles[i].sort(comparePredictionEntryStopSequence);
+                        }
                         layerEntry.predictions = predictionsForVehicles[i];
                         layerEntry.updateJSONData(layerEntry.jsonData);
                     }

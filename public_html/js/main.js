@@ -38,15 +38,6 @@ var myApp =
 // Need to consolidate stops that are almost on top of each other so we can see
 // predictions for both directions.
 //
-// Option to interpolate vehicle positions.
-//      Interpolation:
-//          - Have known location, time.
-//          - Have destination location, time.
-//          - Determine distance along shape.
-//          - Estimate current location along shape, based upon
-//              current time relative to last know time and destination time.
-//
-// Need to lump together vehicle prediction requests when estimating vehicle positions.
 //
 // Need to use route name for route menus.
 
@@ -189,9 +180,14 @@ function updateSplashStatusMsg(msg) {
     element.innerHTML = msg;
 }
 
+function updateStatusMsg(msg) {
+    var element = document.getElementById('status');
+    var date = new Date(Date.now());
+    element.innerHTML = "Last updated from MBTA: " + date.toLocaleString();
+}
 
 function onUpdate() {
-    console.log('start onUpdate');
+    //console.log('start onUpdate');
     clearMarks(stops);
     clearMarks(shapes);
     clearMarks(trips);
@@ -203,6 +199,8 @@ function onUpdate() {
     updateSplashStatusMsg("Loading subway route details...");
     tLayers.routeLayerEntryPromise(uiRouteCategories[CAT_SUBWAY].activeRouteIds)
             .then((routeEntries) => {
+                updateStatusMsg();
+                
                 routeEntries.forEach((entry) => {
                     entry.mark();
                 });
@@ -211,6 +209,8 @@ function onUpdate() {
                 return tLayers.routeLayerEntryPromise(uiRouteCategories[CAT_COMMUTER_RAIL].activeRouteIds);
             })
             .then((routeEntries) => {
+                updateStatusMsg();
+                
                 routeEntries.forEach((entry) => {
                     entry.mark();
                 });
@@ -219,6 +219,8 @@ function onUpdate() {
                 return tLayers.routeLayerEntryPromise(uiRouteCategories[CAT_BUS].activeRouteIds);
             })
             .then((routeEntries) => {
+                updateStatusMsg();
+                
                 routeEntries.forEach((entry) => {
                     entry.mark();
                 });
@@ -227,6 +229,8 @@ function onUpdate() {
                 return tLayers.routeLayerEntryPromise(uiRouteCategories[CAT_FERRY].activeRouteIds);
             })
             .then((routeEntries) => {
+                updateStatusMsg();
+                
                 routeEntries.forEach((entry) => {
                     entry.mark();
                 });
@@ -243,7 +247,7 @@ function onUpdate() {
                     isCloseSplash = false;
                 }
                 
-                console.log('finish onUpdate');
+//                console.log('finish onUpdate');
             });
 }
 
