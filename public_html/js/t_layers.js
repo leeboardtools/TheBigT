@@ -1217,13 +1217,14 @@ class CommuterRailMarker extends VehicleMarker {
     }    
 }
 
-var busHWidth = 30;
+var busHWidth = 40;
+var busLength = 120;
 var busVertices = [
     [0, 0],
     [busHWidth, -busHWidth],
-    [busHWidth, -100],
-    [0, -100 + busHWidth],
-    [-busHWidth, -100],
+    [busHWidth, -busLength],
+    [0, -busLength + busHWidth],
+    [-busHWidth, -busLength],
     [-busHWidth, -busHWidth]
     //[0, 140 * 12 / 39.37]
 ];
