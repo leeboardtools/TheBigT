@@ -1601,7 +1601,10 @@ function createStopMarker(stopJSON) {
     var latLongs = [];
     verticesToLatitudeLongitude(latitude, longitude, 0, stopVertices, latLongs);
     var marker = L.polygon(latLongs, { 
-        fillColor: 'steelblue',
+        //fillColor: 'steelblue',
+        color: 'darkblue',
+        opacity: 0,
+        fillOpacity: 0.2,
         weight: 0
     });
     return marker;
